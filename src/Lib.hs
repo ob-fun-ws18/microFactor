@@ -1,11 +1,21 @@
 {-# LANGUAGE NamedFieldPuns, DeriveFunctor, RankNTypes #-}
 
 module Lib
-    ( interpret
+    ( MicroFactorInstruction (..)
+    , InterpreterError (..)
+    , Nested (..)
+    , ParsedRef (..)
+    , interpret
+    , expressionParser
+    , commandParser
     ) where
 
 import Data.Monoid ((<>))
 import Control.Monad
+import Data.Functor (($>), (<&>))
+import Data.Char (digitToInt)
+import Text.Parsec.String (Parser)
+import Text.Parsec
 
 data MicroFactorInstruction r
     = Comment String
@@ -65,7 +75,7 @@ data MicroFactorInstruction r
     | YieldInput
     | ThreadStart
     | ThreadPass
-    deriving Show
+    deriving (Eq, Show)
 
 data InterpreterError
     = StackOverflow
@@ -235,3 +245,54 @@ interpret (i:is) = (\() -> interpret is) =<< case i of
         | ArithMax
         | ArithMin
     -}
+
+data ParsedRef
+    = Anonymous [MicroFactorInstruction ParsedRef]
+    | Named String
+    deriving (Eq, Show)
+
+expressionParser :: Parser [MicroFactorInstruction ParsedRef]
+expressionParser = element `sepBy` spaces -- TODO: require at least 1 space?
+  where
+    element = choice
+        [ parenthised
+        , numberLiteral
+        , stringLiteral
+        , Wrapper . Named <$> (char '\'' *> identifier)
+        , Call . Named <$> identifier
+        ]
+    identifier = flip label "identifier" $ many1 $ noneOf " ()[]{}':;"
+    parenthised = flip labels ["comment", "block"] $ do
+        end <- choice [char a $> b | (a, b) <- [('(',')'), ('[',']'), ('{','}')]]
+        choice
+            [ Comment <$> do
+                delim <- oneOf "#-*"
+                spaces
+                manyTill anyChar $ try $ spaces >> char delim >> char end
+            , Wrapper . Anonymous <$> (spaces *> expressionParser <* spaces <* char end)
+            ]
+    numberLiteral = flip label "number" $ (char '0' >> choice
+        [ char 'x' >> many1 hexDigit <&> parseNumber 16
+        , char 'b' >> many1 (oneOf "01") <&> parseNumber 2
+        , many digit <&> parseNumber 10
+        ]) <|> (many1 digit <&> parseNumber 10)
+    parseNumber base = LiteralValue . foldl (\x -> ((base * x) +) . fromIntegral . digitToInt) 0
+    stringLiteral = flip label "string" $ do
+        delim <- many1 $ char '"'
+        LiteralString <$> manyTill ((char '\\' >> choice
+            [ char 'r' $> '\r'
+            , char 'n' $> '\n'
+            , char 't' $> '\t'
+            , anyChar
+            ]) <|> anyChar) (try $ string delim)
+
+commandParser = choice
+    [ do
+        char ':'
+        id <- many1 $ noneOf " ()[]{}':" -- identifier
+        spaces
+        expr <- expressionParser
+        char ';'
+        return (id, expr)
+    -- , string "SAVE"
+    ]
