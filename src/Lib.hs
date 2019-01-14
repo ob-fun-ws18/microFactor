@@ -2,18 +2,29 @@
 
 module Lib
     ( MicroFactorInstruction (..)
+    , resolveNames
+    , builtinSymbols
+    , InstructionRef (..)
     , InterpreterError (..)
+    , InterpreterResult (..)
+    , ThreadInterpreter
+    , runInterpreter
+    , Thread (..)
+    , newThread
     , Nested (..)
     , ParsedRef (..)
     , interpret
     , expressionParser
+    , Command (..)
     , commandParser
     ) where
 
 import Data.Monoid ((<>))
 import Control.Monad
+import Control.Arrow
 import Data.Functor (($>), (<&>))
 import Data.Char (digitToInt)
+import Data.Map.Strict (Map, fromList)
 import Text.Parsec.String (Parser)
 import Text.Parsec
 
@@ -22,10 +33,15 @@ data MicroFactorInstruction r
     | LiteralValue Word
     | LiteralAddress Word -- Port address
     | LiteralString String
-    | Wrapper r -- Wrapper (MicroFactorInstruction r) ?
+    | Wrapper (MicroFactorInstruction r)
     | Call r
+    | Operator MicroFactorOperator
+    deriving (Eq, Show, Functor)
 
-    | Execute
+-- could have been part of MicroFactorInstruction
+-- separate definition makes monad implementation simpler
+data MicroFactorOperator
+    = Execute
     | Debugger
     | Exit
     | LiteralFalse
@@ -76,6 +92,82 @@ data MicroFactorInstruction r
     | ThreadStart
     | ThreadPass
     deriving (Eq, Show)
+
+instance Applicative MicroFactorInstruction where
+    pure = return
+    fi <*> a = fi >>= (`fmap` a)
+
+instance Monad MicroFactorInstruction where
+    return = Call
+    i >>= f = case i of
+        Call c -> f c
+        Wrapper x -> Wrapper $ x >>= f
+        Comment c -> Comment c
+        LiteralValue v -> LiteralValue v
+        LiteralAddress a -> LiteralAddress a
+        LiteralString s -> LiteralString s
+        Operator o -> Operator o
+
+instance Foldable MicroFactorInstruction where
+    foldr f z (Call c)    = f c z
+    foldr f z (Wrapper c) = foldr f z c
+    foldr _ z _           = z
+
+instance Traversable MicroFactorInstruction where
+    traverse f (Call c)    = Call <$> f c
+    traverse f (Wrapper c) = Wrapper <$> traverse f c
+    traverse _ x           = pure (case x of
+        Comment c -> Comment c
+        LiteralValue v -> LiteralValue v
+        LiteralAddress a -> LiteralAddress a
+        LiteralString s -> LiteralString s
+        Operator o -> Operator o)
+
+resolveNames :: (a -> Either b (MicroFactorInstruction c)) -> [MicroFactorInstruction a] -> Either b [MicroFactorInstruction c]
+resolveNames f = fmap (fmap join) . traverse (traverse f)
+
+builtinSymbols :: Map String (MicroFactorInstruction a)
+builtinSymbols = fromList $ fmap (second Operator)
+    [ ("nor",      LogicNor)
+    --, ("-!>",      LogicInhib)
+    , ("xor",      LogicXor)
+    , ("nand",     LogicNand)
+    , ("xnor",     LogicXnor)
+    , ("->",       LogicLte)
+    , (">=",       LogicGte)
+    , ("<=",       LogicLte)
+    , ("not",      LogicNot)
+    --, ("rand",     RANDOM)
+    , ("*",        ArithMul)
+    , ("+",        ArithAdd)
+    , ("-",        ArithSub)
+    --, (".",        Send)
+    , ("/",        ArithDiv)
+    , ("/mod",     ArithDivmod)
+    , ("<",        LogicLt)
+    , ("=",        LogicXnor)
+    , (">",        LogicGt)
+    , ("abs",      ArithAbs)
+    , ("and",      LogicAnd)
+    , ("drop",     StackDrop)
+    , ("dup",      StackDuplicate)
+    , ("execute",  Execute)
+    , ("max",      ArithMax)
+    , ("min",      ArithMin)
+    , ("mod",      ArithMin)
+    , ("or",       LogicOr)
+    , ("over",     StackOver)
+    , ("rot",      StackRotate)
+    , ("swap",     StackSwap)
+    , ("<>",       LogicXor)
+    , ("nip",      StackNip)
+    , ("false",    LiteralFalse)
+    , ("true",     LiteralTrue)
+    , ("pick",     StackPick)
+    , ("roll",     StackRoll)
+    , ("tuck",     StackTuck)
+    , ("debugger", Debugger)
+    ]
 
 data InterpreterError
     = StackOverflow
@@ -200,40 +292,42 @@ interpret :: InstructionRef a => [MicroFactorInstruction a] -> ThreadInterpreter
 interpret [] = ThreadInterpreter $ \t -> case t of
     Thread { returnStack = [] } -> InterpreterResult [] t (Right ())
     Thread { returnStack = r:rs } -> runInterpreter (interpret $ resolveRef r) t { returnStack = rs }
-interpret (Exit:_) = interpret []
+interpret (Operator Exit:_) = interpret []
 -- interpret (Call r:is) = interpret (resolveRef r) >> interpret is
 interpret (Call r:is) = ThreadInterpreter $ \t@Thread { returnStack } ->
     runInterpreter (interpret $ resolveRef r) t { returnStack = makeRef is:returnStack }
-interpret (Execute:is) = popData >>= \(Instructions r) -> interpret (Call r:is)
+interpret (Operator Execute:is) = popData >>= \(Instructions r) -> interpret (Call r:is)
 interpret (i:is) = (\() -> interpret is) =<< case i of
     Comment _ -> return ()
     LiteralValue w -> pushData (Integer w)
     LiteralAddress w -> pushData (PortAddress w)
     LiteralString s -> ThreadInterpreter $ \t -> InterpreterResult [s] t (Right ())
-    Wrapper i -> pushData (Instructions i)
-    Debugger -> return () -- TODO: output
-    LiteralFalse -> pushData (Boolean False)
-    LiteralTrue -> pushData (Boolean True)
-    LogicNot -> popDataBool >>= pushData . Boolean . not
-    LogicNor -> interpretBinaryBool $ \a b -> not (a || b)
-    LogicLt -> interpretCompare (<)
-    LogicGt -> interpretCompare (>)
-    LogicXor -> interpretCompare (/=) -- Neq
-    LogicNand -> interpretBinaryBool $ \a b -> not (a && b)
-    LogicAnd -> interpretBinaryBool (&&)
-    LogicXnor -> interpretCompare (==) -- Eq
-    LogicLte -> interpretCompare (<=) -- Impl
-    LogicGte -> interpretCompare (>=)
-    LogicOr -> interpretBinaryBool (||)
-    StackNip -> interpretStack $ \s -> case s of d:_:ds -> Just (d:ds); _ -> Nothing
-    StackDrop -> popData >> return ()
-    -- StackPick
-    StackDuplicate -> interpretStack $ \s -> case s of d:ds -> Just (d:d:ds); _ -> Nothing -- pick 0
-    StackOver -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d2:d1:d2:ds); _ -> Nothing -- pick 1
-    StackTuck -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d1:d2:d1:ds); _ -> Nothing
-    -- StackRoll
-    StackSwap -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d2:d1:ds); _ -> Nothing -- roll 1
-    StackRotate -> interpretStack $ \s -> case s of d1:d2:d3:ds -> Just (d3:d1:d2:ds); _ -> Nothing -- roll 2
+    Wrapper i -> pushData $ Instructions (case i of
+        Call is -> is
+        _ -> makeRef [i])
+    Operator Debugger -> return () -- TODO: output
+    Operator LiteralFalse -> pushData (Boolean False)
+    Operator LiteralTrue -> pushData (Boolean True)
+    Operator LogicNot -> popDataBool >>= pushData . Boolean . not
+    Operator LogicNor -> interpretBinaryBool $ \a b -> not (a || b)
+    Operator LogicLt -> interpretCompare (<)
+    Operator LogicGt -> interpretCompare (>)
+    Operator LogicXor -> interpretCompare (/=) -- Neq
+    Operator LogicNand -> interpretBinaryBool $ \a b -> not (a && b)
+    Operator LogicAnd -> interpretBinaryBool (&&)
+    Operator LogicXnor -> interpretCompare (==) -- Eq
+    Operator LogicLte -> interpretCompare (<=) -- Impl
+    Operator LogicGte -> interpretCompare (>=)
+    Operator LogicOr -> interpretBinaryBool (||)
+    Operator StackNip -> interpretStack $ \s -> case s of d:_:ds -> Just (d:ds); _ -> Nothing
+    Operator StackDrop -> popData >> return ()
+    -- Operator StackPick
+    Operator StackDuplicate -> interpretStack $ \s -> case s of d:ds -> Just (d:d:ds); _ -> Nothing -- pick 0
+    Operator StackOver -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d2:d1:d2:ds); _ -> Nothing -- pick 1
+    Operator StackTuck -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d1:d2:d1:ds); _ -> Nothing
+    -- Operator StackRoll
+    Operator StackSwap -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d2:d1:ds); _ -> Nothing -- roll 1
+    Operator StackRotate -> interpretStack $ \s -> case s of d1:d2:d3:ds -> Just (d3:d1:d2:ds); _ -> Nothing -- roll 2
     {-
         | ArithAdd
         | ArithSub
@@ -248,20 +342,24 @@ interpret (i:is) = (\() -> interpret is) =<< case i of
 
 data ParsedRef
     = Anonymous [MicroFactorInstruction ParsedRef]
-    | Named String
+    | Named SourcePos String
     deriving (Eq, Show)
 
+instance InstructionRef ParsedRef where
+    makeRef = Anonymous
+    resolveRef = const [] -- TODO
+
 expressionParser :: Parser [MicroFactorInstruction ParsedRef]
-expressionParser = element `sepBy` spaces -- TODO: require at least 1 space?
+expressionParser = element `sepBy1` spaces -- TODO: require at least 1 space?
   where
     element = choice
         [ parenthised
         , numberLiteral
         , stringLiteral
-        , Wrapper . Named <$> (char '\'' *> identifier)
-        , Call . Named <$> identifier
+        , Wrapper <$> (char '\'' *> identifier)
+        , identifier
         ]
-    identifier = flip label "identifier" $ many1 $ noneOf " ()[]{}':;"
+    identifier = Call <$> liftM2 Named getPosition identifierParser
     parenthised = flip labels ["comment", "block"] $ do
         end <- choice [char a $> b | (a, b) <- [('(',')'), ('[',']'), ('{','}')]]
         choice
@@ -269,7 +367,7 @@ expressionParser = element `sepBy` spaces -- TODO: require at least 1 space?
                 delim <- oneOf "#-*"
                 spaces
                 manyTill anyChar $ try $ spaces >> char delim >> char end
-            , Wrapper . Anonymous <$> (spaces *> expressionParser <* spaces <* char end)
+            , Wrapper . Call . Anonymous <$> (spaces *> expressionParser <* spaces <* char end)
             ]
     numberLiteral = flip label "number" $ (char '0' >> choice
         [ char 'x' >> many1 hexDigit <&> parseNumber 16
@@ -286,13 +384,25 @@ expressionParser = element `sepBy` spaces -- TODO: require at least 1 space?
             , anyChar
             ]) <|> anyChar) (try $ string delim)
 
+identifierParser :: Parser String
+identifierParser = flip label "identifier" $ many1 $ noneOf " ()[]{}'\":;"
+
+data Command
+    = Quit
+    | Define String [MicroFactorInstruction ParsedRef]
+    | Evaluate [MicroFactorInstruction ParsedRef]
+    | ShowDef String
+
+commandParser :: Parser [Command]
 commandParser = choice
     [ do
         char ':'
-        id <- many1 $ noneOf " ()[]{}':" -- identifier
+        id <- identifierParser
         spaces
         expr <- expressionParser
         char ';'
-        return (id, expr)
-    -- , string "SAVE"
-    ]
+        return $ Define id expr
+    , Quit <$ string "Quit"
+    , ShowDef <$> (string "Show" *> many1 space *> identifierParser)
+    , Evaluate <$> expressionParser <?> "expression"
+    ] `sepBy` spaces <* eof
