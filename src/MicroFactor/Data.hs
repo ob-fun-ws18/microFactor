@@ -65,6 +65,7 @@ data MicroFactorOperator
     MICROFACTOR_INSTRUCTION_OUTPUT,
     MICROFACTOR_INSTRUCTION_RANDOM,
 -}
+    | Send
     | Yield
     | YieldDelay
     | YieldInput

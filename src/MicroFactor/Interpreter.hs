@@ -8,6 +8,7 @@ module MicroFactor.Interpreter
     , InterpreterResult (..)
     , Thread (..)
     , newThread
+    , showValue
     ) where
 
 import MicroFactor.Data
@@ -79,6 +80,8 @@ instance Monad (ThreadInterpreter r) where
             step (InterpreterResult o t (Left e)) = InterpreterResult o t (Left e)
     fail e = ThreadInterpreter $ \t -> InterpreterResult [] t (Left $ TypeError e)
 
+--------------------------------------------------------------------------------
+
 -- pushData :: TaggedValue r -> Thread r -> Thread r
 -- pushData x (t@Thread {dataStack}) = t { dataStack = x:dataStack }
 pushData :: TaggedValue r -> ThreadInterpreter r ()
@@ -97,6 +100,13 @@ popDataBool = do
         Boolean b -> return b
         Integer w -> return (w /= 0)
         x -> fail $ "expected Boolean (or Integer)" -- "but got" ++ show x
+
+popDataInt :: ThreadInterpreter r Word
+popDataInt = do
+    val <- popData
+    case val of
+        Integer w -> return w
+        _ -> fail $ "expected Integer"
 
 interpretCompare :: (forall c. Ord c => c -> c -> Bool) -> ThreadInterpreter r ()
 interpretCompare comp = do
@@ -122,6 +132,14 @@ interpretStack manip = ThreadInterpreter $ \t@Thread {dataStack} ->
         Just dataStack -> InterpreterResult [] t {dataStack} (Right ())
         Nothing -> InterpreterResult [] t (Left StackUnderflow)
 
+
+interpretBinaryInt :: (Word -> Word -> Word) -> ThreadInterpreter r ()
+interpretBinaryInt op = do
+    b <- popDataInt
+    a <- popDataInt
+    pushData $ Integer $ op a b
+
+--------------------------------------------------------------------------------
 
 interpret :: InstructionRef a => [MicroFactorInstruction a] -> ThreadInterpreter a ()
 interpret [] = ThreadInterpreter $ \t -> case t of
@@ -163,14 +181,23 @@ interpret (i:is) = (\() -> interpret is) =<< case i of
     -- Operator StackRoll
     Operator StackSwap -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d2:d1:ds); _ -> Nothing -- roll 1
     Operator StackRotate -> interpretStack $ \s -> case s of d1:d2:d3:ds -> Just (d3:d1:d2:ds); _ -> Nothing -- roll 2
-    {-
-        | ArithAdd
-        | ArithSub
-        | ArithMul
-        | ArithDiv
-        | ArithMod
-        | ArithDivmod
-        | ArithAbs
-        | ArithMax
-        | ArithMin
-    -}
+
+    Operator ArithAdd -> interpretBinaryInt (+)
+    Operator ArithSub -> interpretBinaryInt (-)
+    Operator ArithMul -> interpretBinaryInt (*)
+    Operator ArithDiv -> interpretBinaryInt div
+    Operator ArithMod -> interpretBinaryInt mod
+    -- Operator ArithDivmod -> interpretBinaryInt
+    Operator ArithAbs -> pushData . Integer =<< abs <$> popDataInt
+    Operator ArithMax -> interpretBinaryInt max
+    Operator ArithMin -> interpretBinaryInt min
+
+    Operator Send -> do
+        val <- popData
+        ThreadInterpreter $ \t -> InterpreterResult [showValue val] t (Right ())
+
+showValue :: TaggedValue a -> String
+showValue (Boolean b) = show b
+showValue (Integer w) = show w
+showValue (PortAddress w) = '#':show w
+showValue (Instructions _) = "<Code>"

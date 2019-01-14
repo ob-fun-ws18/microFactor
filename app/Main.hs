@@ -15,7 +15,6 @@ import MicroFactor
 
 main :: IO ()
 main = do
-    -- setCursorPosition 5 0
     setTitle "MicroFactor"
     repl AppState { definitions = empty, thread = newThread }
 
@@ -25,7 +24,9 @@ data AppState = AppState
 }
 
 repl state = do
+    setSGR [SetColor Foreground Vivid Blue]
     putStr "µ> "
+    setSGR []
     hFlush stdout
     line <- getLine
     case runParser commandParser () "" line of
@@ -49,13 +50,13 @@ run state (Evaluate exp:cmds) = case resolve (definitions state) exp of
         putErrorMessage pos $ "unknown identifier " ++ name
         repl state -- dismiss other cmds
     Right rval -> do
-        print rval
+        -- print rval
         let res = runInterpreter (interpret rval) (thread state)
         forM_ (interpreterOutput res) putStrLn
         case interpreterValue res of
-            Left e -> print e
+            Left e -> asWarning $ print e
             Right _ -> return ()
-        putStrLn $ "< " ++ (show $ reverse $ dataStack $ interpreterThread res)
+        putStrLn $ "< " ++ (unwords $ fmap showValue $ reverse $ dataStack $ interpreterThread res)
         run state { thread = interpreterThread res } cmds
 run state (ShowDef id:cmds) = do
     putStrLn $ case lookup id $ definitions state of
@@ -64,8 +65,12 @@ run state (ShowDef id:cmds) = do
     run state cmds
 
 putErrorMessage :: SourcePos -> String -> IO ()
-putErrorMessage pos msg = do
-    setSGR [SetColor Background Dull Red]
+putErrorMessage pos msg = asWarning $ do
     putStrLn $ replicate (sourceColumn pos) ' ' ++ "  ^"
     putStrLn msg
+
+asWarning :: IO a -> IO ()
+asWarning print = do
+    setSGR [SetColor Background Dull Red, SetColor Foreground Vivid Green]
+    print
     setSGR [] -- reset
