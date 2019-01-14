@@ -1,6 +1,5 @@
 module Main where
 
-import Lib
 import Control.Applicative ((<|>))
 import Control.Monad (forever, unless, forM_)
 import Control.Concurrent
@@ -12,10 +11,12 @@ import System.IO
 import System.Console.ANSI
 import Prelude hiding (lookup)
 
+import MicroFactor
+
 main :: IO ()
 main = do
     -- setCursorPosition 5 0
-    setTitle "Microfactor"
+    setTitle "MicroFactor"
     repl AppState { definitions = empty, thread = newThread }
 
 data AppState = AppState
@@ -29,27 +30,23 @@ repl state = do
     line <- getLine
     case runParser commandParser () "" line of
         Left e -> do
-            putStrLn $ replicate (sourceColumn $ errorPos e) ' ' ++ "  ^"
-            putStrLn $ showErrorMessages "or" "oops?" "expecting" "unexpected" "end of input" $ errorMessages e
+            putErrorMessage (errorPos e) $ showErrorMessages "or" "oops?" "expecting" "unexpected" "end of input" $ errorMessages e
             repl state
         Right cmds -> run state cmds
 
 run state [] = repl state
 run _ (Quit:_) = return ()
 run state (Define id val:cmds) = case resolve (definitions state) val of -- TODO: create circular reference to updated `defs`
-    Left pos -> do
-        putStrLn $ replicate (sourceColumn pos) ' ' ++ "  ^"
-        putStrLn "unknown identifier"
+    Left (pos, name) -> do
+        putErrorMessage pos $ "unknown identifier " ++ name
         repl state -- dismiss other cmds
     Right rval -> do
         let defs = insert id rval (definitions state)
         putStrLn $ "Defined " ++ id
         run state { definitions = defs } cmds
 run state (Evaluate exp:cmds) = case resolve (definitions state) exp of
-    Left pos -> do
-        putStrLn $ replicate (sourceColumn pos) ' ' ++ "  ^"
-        putStrLn "unknown identifier in"
-        print exp
+    Left (pos, name) -> do
+        putErrorMessage pos $ "unknown identifier " ++ name
         repl state -- dismiss other cmds
     Right rval -> do
         print rval
@@ -58,23 +55,17 @@ run state (Evaluate exp:cmds) = case resolve (definitions state) exp of
         case interpreterValue res of
             Left e -> print e
             Right _ -> return ()
-        putStrLn $ "< " ++ (show $ dataStack $ interpreterThread res)
+        putStrLn $ "< " ++ (show $ reverse $ dataStack $ interpreterThread res)
         run state { thread = interpreterThread res } cmds
 run state (ShowDef id:cmds) = do
-    putStrLn $ ":" ++ id ++ " "
+    putStrLn $ case lookup id $ definitions state of
+        Nothing -> id ++ " not found"
+        Just ref -> ":" ++ id ++ " " ++ show ref
     run state cmds
 
-resolve userDefs = resolveNames go
-  where
-    go :: ParsedRef -> Either SourcePos (MicroFactorInstruction ResolvedRef)
-    go (Anonymous is) = fmap (Call . ResolvedRef "") (resolveNames go is)
-    go (Named loc name) = maybe (Left loc) Right $ lookup name builtinSymbols <|> fmap (Call . ResolvedRef name) (lookup name userDefs)
-
-data ResolvedRef = ResolvedRef String [MicroFactorInstruction ResolvedRef]
-
-instance InstructionRef ResolvedRef where
-    makeRef = ResolvedRef ""
-    resolveRef (ResolvedRef _ is) = is
-
-instance Show ResolvedRef where
-    show (ResolvedRef name _) = "ResolvedRef { " ++ name ++ " }"
+putErrorMessage :: SourcePos -> String -> IO ()
+putErrorMessage pos msg = do
+    setSGR [SetColor Background Dull Red]
+    putStrLn $ replicate (sourceColumn pos) ' ' ++ "  ^"
+    putStrLn msg
+    setSGR [] -- reset

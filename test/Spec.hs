@@ -5,7 +5,8 @@ import Test.Tasty.HUnit
 
 import Text.Printf (printf)
 import Text.Parsec (runParser)
-import Lib
+
+import MicroFactor
 
 main :: IO ()
 main = defaultMain $ testGroup "Microfactor"
