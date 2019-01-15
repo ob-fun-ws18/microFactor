@@ -24,6 +24,7 @@ dependencies:
 - containers
 - ansi-terminal
 - parsec
+- transformers
 
 library:
   source-dirs: src

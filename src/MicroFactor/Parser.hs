@@ -87,6 +87,7 @@ identifierParser = flip label "identifier" $ many1 $ noneOf " ()[]{}'\":;"
 
 data Command
     = Quit
+    | List
     | Define String [MicroFactorInstruction ParsedRef]
     | Evaluate [MicroFactorInstruction ParsedRef]
     | ShowDef String
@@ -101,6 +102,7 @@ commandParser = choice
         char ';'
         return $ Define id expr
     , Quit <$ string "Quit"
+    , List <$ string "List"
     , ShowDef <$> (string "Show" *> many1 space *> identifierParser)
     , Evaluate <$> expressionParser <?> "expression"
     ] `sepBy` spaces <* eof

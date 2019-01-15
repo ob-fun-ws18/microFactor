@@ -2,6 +2,8 @@ module Main where
 
 import Control.Applicative ((<|>))
 import Control.Monad (forever, unless, forM_)
+import Control.Monad.IO.Class
+import Control.Monad.Trans.State
 import Control.Concurrent
 import Data.Map.Strict
 import Text.Parsec (runParser)
@@ -16,61 +18,70 @@ import MicroFactor
 main :: IO ()
 main = do
     setTitle "MicroFactor"
-    repl AppState { definitions = empty, thread = newThread }
+    evalStateT repl AppState { definitions = empty, thread = newThread }
 
 data AppState = AppState
     { definitions :: Map String [MicroFactorInstruction ResolvedRef]
     , thread :: Thread ResolvedRef
 }
 
-repl state = do
-    setSGR [SetColor Foreground Vivid Blue]
-    putStr "µ> "
-    setSGR []
-    hFlush stdout
-    line <- getLine
+repl = do
+    line <- liftIO $ do
+        setSGR [SetColor Foreground Vivid Blue]
+        putStr "µ> "
+        setSGR []
+        hFlush stdout
+        getLine
     case runParser commandParser () "" line of
         Left e -> do
             putErrorMessage (errorPos e) $ showErrorMessages "or" "oops?" "expecting" "unexpected" "end of input" $ errorMessages e
-            repl state
-        Right cmds -> run state cmds
+            repl
+        Right cmds -> run cmds
 
-run state [] = repl state
-run _ (Quit:_) = return ()
-run state (Define id val:cmds) = case resolve (definitions state) val of -- TODO: create circular reference to updated `defs`
+run [] = repl
+run (Quit:_) = return ()
+run (Define id val:cmds) = gets definitions >>= \defs -> case resolve defs val of -- TODO: create circular reference to updated `defs`
     Left (pos, name) -> do
         putErrorMessage pos $ "unknown identifier " ++ name
-        repl state -- dismiss other cmds
+        repl -- dismiss other cmds
     Right rval -> do
-        let defs = insert id rval (definitions state)
-        putStrLn $ "Defined " ++ id
-        run state { definitions = defs } cmds
-run state (Evaluate exp:cmds) = case resolve (definitions state) exp of
+        modify (\state -> state { definitions = insert id rval (definitions state) })
+        liftIO $ putStrLn $ "Defined " ++ id
+        run cmds
+run (Evaluate exp:cmds) = gets definitions >>= \defs -> case resolve defs exp of
     Left (pos, name) -> do
         putErrorMessage pos $ "unknown identifier " ++ name
-        repl state -- dismiss other cmds
+        repl -- dismiss other cmds
     Right rval -> do
         -- print rval
+        state <- get
         let res = runInterpreter (interpret rval) (thread state)
-        forM_ (interpreterOutput res) putStrLn
+        put state { thread = interpreterThread res }
+        liftIO $ forM_ (interpreterOutput res) putStrLn
         case interpreterValue res of
             Left e -> asWarning $ print e
             Right _ -> return ()
-        putStrLn $ "< " ++ (unwords $ fmap showValue $ reverse $ dataStack $ interpreterThread res)
-        run state { thread = interpreterThread res } cmds
-run state (ShowDef id:cmds) = do
-    putStrLn $ case lookup id $ definitions state of
+        liftIO $ putStrLn $ "< " ++ (unwords $ fmap showValue $ reverse $ dataStack $ interpreterThread res)
+        run cmds
+run (ShowDef id:cmds) = do
+    userFns <- gets definitions
+    liftIO $ putStrLn $ case lookup id userFns of
         Nothing -> id ++ " not found"
         Just ref -> ":" ++ id ++ " " ++ show ref
-    run state cmds
+    run cmds
+run (List:cmds) = do
+    userFns <- gets definitions
+    liftIO $ putStrLn $ unwords $ keys builtinSymbols
+    liftIO $ putStrLn $ unwords $ keys userFns
+    run cmds
 
-putErrorMessage :: SourcePos -> String -> IO ()
+putErrorMessage :: SourcePos -> String -> StateT s IO ()
 putErrorMessage pos msg = asWarning $ do
     putStrLn $ replicate (sourceColumn pos) ' ' ++ "  ^"
     putStrLn msg
 
-asWarning :: IO a -> IO ()
-asWarning print = do
+asWarning :: IO a -> StateT s IO ()
+asWarning print = liftIO $ do
     setSGR [SetColor Background Dull Red, SetColor Foreground Vivid Green]
     print
     setSGR [] -- reset

@@ -7,6 +7,8 @@ module MicroFactor.Data
     , Nested
     ) where
 
+-- data type for instructions to be interpreted
+-- generic over the type of values to be called
 data MicroFactorInstruction r
     = Comment String
     | LiteralValue Word
@@ -18,7 +20,7 @@ data MicroFactorInstruction r
     deriving (Eq, Show, Functor)
 
 -- could have been part of MicroFactorInstruction
--- separate definition makes monad implementation simpler
+-- separate definition makes monad & traversable implementations simpler
 data MicroFactorOperator
     = Execute
     | Debugger
@@ -58,7 +60,6 @@ data MicroFactorOperator
     | ArithMin
 {-
     MICROFACTOR_INSTRUCTION_PUSH_OWN_PORTADDRESS,
-    MICROFACTOR_INSTRUCTION_SEND_SERIAL,
     MICROFACTOR_INSTRUCTION_READ_FIELD,
     MICROFACTOR_INSTRUCTION_WRITE_FIELD,
     MICROFACTOR_INSTRUCTION_INPUT,
@@ -105,10 +106,16 @@ instance Traversable MicroFactorInstruction where
 
 --------------------------------------------------------------------------------
 
+-- a typeclass for references to instructions
+-- so that the interpreter might be generic
 class InstructionRef a where
+    -- used to create a reference for anonymous blocks
     makeRef :: [MicroFactorInstruction a] -> a
+    -- used to get the referenced list of instruction
     resolveRef :: a -> [MicroFactorInstruction a]
 
+-- the most simple implementation of `InstructionRef`
+-- while avoiding infinite types
 newtype Nested = Nested { unnest :: [MicroFactorInstruction Nested] } deriving Show
 instance InstructionRef Nested where
     makeRef = Nested
