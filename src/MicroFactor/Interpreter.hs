@@ -2,9 +2,10 @@
 
 module MicroFactor.Interpreter
     ( ThreadInterpreter
-    , runInterpreter
     , interpret
     , InterpreterError (..)
+    , ThreadState (..)
+    , TaggedValue (..)
     , InterpreterResult (..)
     , Thread (..)
     , newThread
@@ -34,7 +35,7 @@ data TaggedValue r
     | Integer Word
     | PortAddress Word
     | Instructions r
-    deriving (Eq, Show)
+    deriving (Eq, Show, Functor)
 
 data Thread r = Thread {
     stopPending :: Bool,
@@ -76,7 +77,7 @@ instance Monad (ThreadInterpreter r) where
             step (InterpreterResult o1 t1 (Right x1)) =
                 let InterpreterResult o2 t2 x2 = runInterpreter (f x1) t1
                 in InterpreterResult (o1 <> o2) t2 x2
-            -- step interpreterResult = interpreterLeftResult
+            -- step interpreterLeftResult = interpreterLeftResult
             step (InterpreterResult o t (Left e)) = InterpreterResult o t (Left e)
     fail e = ThreadInterpreter $ \t -> InterpreterResult [] t (Left $ TypeError e)
 
@@ -141,16 +142,19 @@ interpretBinaryInt op = do
 
 --------------------------------------------------------------------------------
 
-interpret :: InstructionRef a => [MicroFactorInstruction a] -> ThreadInterpreter a ()
-interpret [] = ThreadInterpreter $ \t -> case t of
+interpret :: InstructionRef a => [MicroFactorInstruction a] -> Thread a -> InterpreterResult a ()
+interpret = runInterpreter . interpreter
+
+interpreter :: InstructionRef a => [MicroFactorInstruction a] -> ThreadInterpreter a ()
+interpreter [] = ThreadInterpreter $ \t -> case t of
     Thread { returnStack = [] } -> InterpreterResult [] t (Right ())
-    Thread { returnStack = r:rs } -> runInterpreter (interpret $ resolveRef r) t { returnStack = rs }
-interpret (Operator Exit:_) = interpret []
--- interpret (Call r:is) = interpret (resolveRef r) >> interpret is
-interpret (Call r:is) = ThreadInterpreter $ \t@Thread { returnStack } ->
-    runInterpreter (interpret $ resolveRef r) t { returnStack = makeRef is:returnStack }
-interpret (Operator Execute:is) = popData >>= \(Instructions r) -> interpret (Call r:is)
-interpret (i:is) = (\() -> interpret is) =<< case i of
+    Thread { returnStack = r:rs } -> runInterpreter (interpreter $ resolveRef r) t { returnStack = rs }
+interpreter (Operator Exit:_) = interpreter []
+-- interpreter (Call r:is) = interpreter (resolveRef r) >> interpreter is
+interpreter (Call r:is) = ThreadInterpreter $ \t@Thread { returnStack } ->
+    runInterpreter (interpreter $ resolveRef r) t { returnStack = makeRef is:returnStack }
+interpreter (Operator Execute:is) = popData >>= \(Instructions r) -> interpreter (Call r:is)
+interpreter (i:is) = (\() -> interpreter is) =<< case i of
     Comment _ -> return ()
     LiteralValue w -> pushData (Integer w)
     LiteralAddress w -> pushData (PortAddress w)

@@ -3,8 +3,12 @@
 import Test.Tasty
 import Test.Tasty.HUnit
 
+import Control.Monad (foldM)
+import Data.Bifunctor (first)
+import Data.Map.Strict (Map, insert, empty)
 import Text.Printf (printf)
-import Text.Parsec (runParser)
+import Text.Parsec (runParser, errorPos)
+import Text.Parsec.Pos (SourcePos, newPos)
 
 import MicroFactor
 
@@ -33,10 +37,17 @@ main = defaultMain $ testGroup "Microfactor"
         , parse "\"\" \" \"\"" @?= Right [LiteralString " \" "]
         ]
     , testGroup "Commands"
-        [ -- testCase "simple declaration" $ runParser commandParser () "" ":test 1 + 1;" @?= Right ("test", [LiteralValue 1, Call $ Named "+", LiteralValue 1])
+        [ testCase "simple declaration" $ runParser commandParser () "" ":test 1 + 1;" @?= Right [Define "test" [LiteralValue 1, Call $ Named (column 9) "+", LiteralValue 1]]
         ]
     , testGroup "Interpreter"
-        []
+        [ testInterpreter (dataStack . interpreterThread) [] "1 2 +" [Integer 3]
+        , testInterpreter (dataStack . interpreterThread) [] "1 2 =" [Boolean False]
+        , testInterpreter (returnStack . interpreterThread) [("add2", "2 +")] "1 add2" []
+        , testInterpreter interpreterOutput [] "1 1 + 2 = ." ["True"]
+        , testInterpreter interpreterValue [] "1 = 1" (Left StackUnderflow)
+        , testInterpreter interpreterValue [("is", "=")] "1 is" (Left StackUnderflow)
+        , testInterpreter (returnStack . interpreterThread) [("is", "=")] "1 is" []
+        ]
     ]
 
 fromAssertions :: String -> [Assertion] -> [TestTree]
@@ -48,3 +59,19 @@ data SimpleRef = N String | B [MicroFactorInstruction SimpleRef] deriving (Eq, S
 toSimple (Named _ r) = N r
 toSimple (Anonymous is) = B $ fmap (fmap toSimple) is
 parse = fmap (fmap (fmap toSimple)) . runParser expressionParser () ""
+
+column :: Int -> SourcePos
+column = newPos "" 1
+
+parseAndResolve :: Map String [MicroFactorInstruction ResolvedRef] -> String -> Either (SourcePos, String) [MicroFactorInstruction ResolvedRef]
+parseAndResolve ctx str = do
+    exp <- first (\e -> (errorPos e, "parse error")) $ runParser expressionParser () "" str
+    resolve ctx exp
+
+parseContext :: [(String, String)] -> String -> Either (SourcePos, String) [MicroFactorInstruction ResolvedRef]
+parseContext list exp = do
+    userDefs <- foldM (\m (id, v) -> insert id <$> parseAndResolve m v <*> pure m) mempty list
+    parseAndResolve userDefs exp
+
+testInterpreter :: (Eq a, Show a) => (InterpreterResult ResolvedRef () -> a) -> [(String, String)] -> String -> a -> TestTree
+testInterpreter get ctx exp res = testCase exp $ get <$> (interpret <$> parseContext ctx exp <*> pure newThread) @?= Right res

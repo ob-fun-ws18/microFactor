@@ -55,9 +55,10 @@ run (Evaluate exp:cmds) = gets definitions >>= \defs -> case resolve defs exp of
     Right rval -> do
         -- print rval
         state <- get
-        let res = runInterpreter (interpret rval) (thread state)
+        let res = interpret rval $ thread state
         put state { thread = interpreterThread res }
         liftIO $ forM_ (interpreterOutput res) putStrLn
+        liftIO $ print $ interpreterThread res
         case interpreterValue res of
             Left e -> asWarning $ print e
             Right _ -> return ()

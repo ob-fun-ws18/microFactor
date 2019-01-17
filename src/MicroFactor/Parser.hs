@@ -33,16 +33,17 @@ instance InstructionRef ParsedRef where
     makeRef = Anonymous
     resolveRef = const [] -- TODO
 
-data ResolvedRef = ResolvedRef String [MicroFactorInstruction ResolvedRef]
+data ResolvedRef = ResolvedRef String [MicroFactorInstruction ResolvedRef] deriving (Eq, Show)
 
 instance InstructionRef ResolvedRef where
     makeRef = ResolvedRef ""
     resolveRef (ResolvedRef _ is) = is
 
+{-
 instance Show ResolvedRef where
     -- avoid showing circular structures in recursive functions
     show (ResolvedRef name _) = "ResolvedRef { " ++ name ++ " }"
-
+-}
 --------------------------------------------------------------------------------
 
 expressionParser :: Parser [MicroFactorInstruction ParsedRef]
@@ -91,6 +92,7 @@ data Command
     | Define String [MicroFactorInstruction ParsedRef]
     | Evaluate [MicroFactorInstruction ParsedRef]
     | ShowDef String
+    deriving (Eq, Show)
 
 commandParser :: Parser [Command]
 commandParser = choice
