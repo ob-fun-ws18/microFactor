@@ -79,9 +79,13 @@ instance Monad (ThreadInterpreter r) where
                 in InterpreterResult (o1 <> o2) t2 x2
             -- step interpreterLeftResult = interpreterLeftResult
             step (InterpreterResult o t (Left e)) = InterpreterResult o t (Left e)
-    fail e = ThreadInterpreter $ \t -> InterpreterResult [] t (Left $ TypeError e)
+    fail e = ThreadInterpreter $ \t -> interpreterFailResult t $ TypeError e
 
 --------------------------------------------------------------------------------
+
+-- fails and aborts the thread by truncating the return stack (i.e. no "catching")
+interpreterFailResult :: Thread r -> InterpreterError -> InterpreterResult r a
+interpreterFailResult t e = InterpreterResult [] t { returnStack = [] } $ Left e
 
 -- pushData :: TaggedValue r -> Thread r -> Thread r
 -- pushData x (t@Thread {dataStack}) = t { dataStack = x:dataStack }
@@ -91,7 +95,7 @@ pushData x = ThreadInterpreter $ \t@Thread {dataStack} ->
 
 popData :: ThreadInterpreter r (TaggedValue r)
 popData = ThreadInterpreter $ \t -> case t of
-    Thread { dataStack = [] } -> InterpreterResult [] t (Left StackUnderflow)
+    Thread { dataStack = [] } -> interpreterFailResult t StackUnderflow
     Thread { dataStack = d:ds } -> InterpreterResult [] t { dataStack = ds } (Right d)
 
 popDataBool :: ThreadInterpreter r Bool
@@ -131,7 +135,7 @@ interpretStack :: (forall a. [a] -> Maybe [a]) -> ThreadInterpreter r ()
 interpretStack manip = ThreadInterpreter $ \t@Thread {dataStack} ->
     case manip dataStack of
         Just dataStack -> InterpreterResult [] t {dataStack} (Right ())
-        Nothing -> InterpreterResult [] t (Left StackUnderflow)
+        Nothing -> interpreterFailResult t StackUnderflow
 
 
 interpretBinaryInt :: (Word -> Word -> Word) -> ThreadInterpreter r ()
