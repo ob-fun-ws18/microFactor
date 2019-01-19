@@ -5,6 +5,7 @@ import Control.Monad (forever, unless, forM_)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State
 import Control.Concurrent
+import Data.List (intercalate)
 import Data.Map.Strict
 import Text.Parsec (runParser)
 import Text.Parsec.Error
@@ -58,17 +59,17 @@ run (Evaluate exp:cmds) = gets definitions >>= \defs -> case resolve defs exp of
         let res = interpret rval $ thread state
         put state { thread = interpreterThread res }
         liftIO $ forM_ (interpreterOutput res) putStrLn
-        liftIO $ print $ interpreterThread res
+        -- liftIO $ print $ interpreterThread res
         case interpreterValue res of
             Left e -> asWarning $ print e
             Right _ -> return ()
-        liftIO $ putStrLn $ "< " ++ (unwords $ fmap showValue $ reverse $ dataStack $ interpreterThread res)
+        liftIO $ putStrLn $ "{ " ++ (intercalate " { " $ fmap showValue $ reverse $ dataStack $ interpreterThread res)
         run cmds
 run (ShowDef id:cmds) = do
     userFns <- gets definitions
     liftIO $ putStrLn $ case lookup id userFns of
         Nothing -> id ++ " not found"
-        Just ref -> ":" ++ id ++ " " ++ show ref
+        Just ref -> ":" ++ id ++ " " ++ show ref ++ ";"
     run cmds
 run (List:cmds) = do
     userFns <- gets definitions

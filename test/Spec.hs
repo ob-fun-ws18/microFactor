@@ -35,9 +35,19 @@ main = defaultMain $ testGroup "Microfactor"
         , parse "\"string\"" @?= Right [LiteralString "string"]
         , parse "\"\\n\\r\\t\\\\ \\x\"" @?= Right [LiteralString "\n\r\t\\ x"]
         , parse "\"\" \" \"\"" @?= Right [LiteralString " \" "]
+        ] ++
+        [ testCase "resolve" $ parseContext [("hello", "1"), ("world", "2")] "world (\"oh\" 'hello) execute" @?= Right
+            [ Call $ ResolvedRef "world" [LiteralValue 2]
+            , Wrapper $ Call $ ResolvedRef ""
+                [ LiteralString "oh"
+                , Wrapper $ Call $ ResolvedRef "hello" [LiteralValue 1]]
+            , Operator Execute]
+        , roundTrip "1 2 \"string\" (* comment *)"
+        , roundTrip "example (oh 'well) !"
         ]
     , testGroup "Commands"
-        [ testCase "simple declaration" $ runParser commandParser () "" ":test 1 + 1;" @?= Right [Define "test" [LiteralValue 1, Call $ Named (column 9) "+", LiteralValue 1]]
+        [ testCase "simple declaration" $ runParser commandParser () "" ":test 1 + 1;" @?= Right
+            [Define "test" [LiteralValue 1, Call $ Named (column 9) "+", LiteralValue 1]]
         ]
     , testGroup "Interpreter"
         [ testInterpreter (dataStack . interpreterThread) [] "1 2 +" [Integer 3]
@@ -56,9 +66,19 @@ fromAssertions name =
 
 -- like ParsedRef but without source position
 data SimpleRef = N String | B [MicroFactorInstruction SimpleRef] deriving (Eq, Show)
+instance InstructionRef SimpleRef where
+    makeRef = B
+    resolveRef (N _) = []
+    resolveRef (B x) = x
+    refName (N n) = n
+    refName (B _) = ""
 toSimple (Named _ r) = N r
 toSimple (Anonymous is) = B $ fmap (fmap toSimple) is
+
 parse = fmap (fmap (fmap toSimple)) . runParser expressionParser () ""
+
+roundTrip :: String -> TestTree
+roundTrip exp = testCase ("round-trip "++exp) $ show <$> parse exp @?= Right exp
 
 column :: Int -> SourcePos
 column = newPos "" 1

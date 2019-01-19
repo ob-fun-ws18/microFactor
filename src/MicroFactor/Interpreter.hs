@@ -157,7 +157,9 @@ interpreter (Operator Exit:_) = interpreter []
 -- interpreter (Call r:is) = interpreter (resolveRef r) >> interpreter is
 interpreter (Call r:is) = ThreadInterpreter $ \t@Thread { returnStack } ->
     runInterpreter (interpreter $ resolveRef r) t { returnStack = makeRef is:returnStack }
-interpreter (Operator Execute:is) = popData >>= \(Instructions r) -> interpreter (Call r:is)
+interpreter (Operator Execute:is) = popData >>= \val -> case val of
+    Instructions r -> interpreter (Call r:is)
+    _              -> ThreadInterpreter $ \t -> interpreterFailResult t InvalidExecutionToken
 interpreter (i:is) = (\() -> interpreter is) =<< case i of
     Comment _ -> return ()
     LiteralValue w -> pushData (Integer w)

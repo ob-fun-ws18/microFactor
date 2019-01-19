@@ -17,7 +17,7 @@ data MicroFactorInstruction r
     | Wrapper (MicroFactorInstruction r)
     | Call r
     | Operator MicroFactorOperator
-    deriving (Eq, Show, Functor)
+    deriving (Eq, Functor)
 
 -- could have been part of MicroFactorInstruction
 -- separate definition makes monad & traversable implementations simpler
@@ -72,7 +72,7 @@ data MicroFactorOperator
     | YieldInput
     | ThreadStart
     | ThreadPass
-    deriving (Eq, Show)
+    deriving (Eq, Ord, Enum, Bounded)
 
 instance Applicative MicroFactorInstruction where
     pure = return
@@ -113,6 +113,17 @@ class InstructionRef a where
     makeRef :: [MicroFactorInstruction a] -> a
     -- used to get the referenced list of instruction
     resolveRef :: a -> [MicroFactorInstruction a]
+    -- used to refer to the instructions by name, instead of treating them as anonymous
+    refName :: a -> String
+    refName _ = ""
+
+{-
+-- flexible and undecidable instance :-)
+instance InstructionRef a => Show a where
+    show ref = case refName ref of
+        "" -> show $ resolveRef ref
+        name -> name
+-}
 
 -- the most simple implementation of `InstructionRef`
 -- while avoiding infinite types
@@ -120,3 +131,64 @@ newtype Nested = Nested { unnest :: [MicroFactorInstruction Nested] } deriving S
 instance InstructionRef Nested where
     makeRef = Nested
     resolveRef = unnest
+
+--------------------------------------------------------------------------------
+
+instance Show MicroFactorOperator where
+    show Execute        = "execute"
+    show Debugger       = "debugger"
+    -- show Exit           = ""
+    show LiteralFalse   = "false"
+    show LiteralTrue    = "true"
+    show LogicNot       = "not"
+    show LogicNor       = "nor"
+    show LogicLt        = "<"
+    show LogicGt        = ">"
+    show LogicXor       = "<>"
+    show LogicNand      = "nand"
+    show LogicAnd       = "and"
+    show LogicXnor      = "="
+    show LogicLte       = "->"
+    show LogicGte       = ">="
+    show LogicOr        = "or"
+    show StackNip       = "nip"
+    show StackDrop      = "drop"
+    show StackPick      = "pick"
+    show StackDuplicate = "dup"
+    show StackOver      = "over"
+    show StackTuck      = "tuck"
+    show StackRoll      = "roll"
+    show StackSwap      = "swap"
+    show StackRotate    = "rot"
+    show ArithAdd       = "+"
+    show ArithSub       = "-"
+    show ArithMul       = "*"
+    show ArithDiv       = "/"
+    show ArithMod       = "mod"
+    show ArithDivmod    = "/mod"
+    show ArithAbs       = "abs"
+    show ArithMax       = "max"
+    show ArithMin       = "min"
+    show Send           = "."
+    -- show Yield          = ""
+    -- show YieldDelay     = ""
+    -- show YieldInput     = ""
+    -- show ThreadStart    = ""
+    -- show ThreadPass     = ""
+    show _ = ""
+
+instance InstructionRef r => Show (MicroFactorInstruction r) where
+    show (Comment c) = "(* " ++ c ++ " *)"
+    show (LiteralValue w) = show w
+    show (LiteralAddress w) = "#" ++ show w
+    show (LiteralString s) = "\"" ++ s ++ "\"" -- TODO: escaping
+    show (Wrapper (Call ref)) | isAnonymous ref = "(" ++ showList (resolveRef ref) ")"
+    show (Wrapper i) = "'" ++ show i
+    show (Call ref) | isAnonymous ref = error "call to anonymous function"
+                    | otherwise = refName ref
+    show (Operator o) = show o
+
+    showList rs = (++) $ unwords $ map show rs
+
+isAnonymous :: InstructionRef a => a -> Bool
+isAnonymous = null . refName

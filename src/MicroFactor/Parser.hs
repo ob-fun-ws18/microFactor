@@ -15,7 +15,9 @@ import Control.Arrow (second)
 import Control.Applicative ((<|>))
 import Data.Functor (($>), (<&>))
 import Data.Char (digitToInt)
-import Data.Map.Strict (Map, fromList, lookup)
+import Data.Maybe (fromJust)
+import Data.Map.Strict (Map, fromList, toList, lookup)
+import Data.Tuple (swap)
 import Text.Parsec.String (Parser)
 import Text.Parsec hiding ((<|>))
 import Prelude hiding (lookup)
@@ -32,18 +34,21 @@ data ParsedRef
 instance InstructionRef ParsedRef where
     makeRef = Anonymous
     resolveRef = const [] -- TODO
+    refName (Anonymous _) = ""
+    refName (Named _ n) = n
 
-data ResolvedRef = ResolvedRef String [MicroFactorInstruction ResolvedRef] deriving (Eq, Show)
+data ResolvedRef = ResolvedRef String [MicroFactorInstruction ResolvedRef] deriving Eq
 
 instance InstructionRef ResolvedRef where
     makeRef = ResolvedRef ""
     resolveRef (ResolvedRef _ is) = is
+    refName (ResolvedRef n _) = n
 
-{-
 instance Show ResolvedRef where
     -- avoid showing circular structures in recursive functions
-    show (ResolvedRef name _) = "ResolvedRef { " ++ name ++ " }"
--}
+    show (ResolvedRef "" is) = show is
+    show (ResolvedRef name _) = name
+
 --------------------------------------------------------------------------------
 
 expressionParser :: Parser [MicroFactorInstruction ParsedRef]
@@ -115,47 +120,7 @@ resolveNames :: (a -> Either b (MicroFactorInstruction c)) -> [MicroFactorInstru
 resolveNames f = fmap (fmap join) . traverse (traverse f)
 
 builtinSymbols :: Map String (MicroFactorInstruction a)
-builtinSymbols = fromList $ fmap (second Operator)
-    [ ("nor",      LogicNor)
-    --, ("-!>",      LogicInhib)
-    , ("xor",      LogicXor)
-    , ("nand",     LogicNand)
-    , ("xnor",     LogicXnor)
-    , ("->",       LogicLte)
-    , (">=",       LogicGte)
-    , ("<=",       LogicLte)
-    , ("not",      LogicNot)
-    --, ("rand",     RANDOM)
-    , ("*",        ArithMul)
-    , ("+",        ArithAdd)
-    , ("-",        ArithSub)
-    , (".",        Send)
-    , ("/",        ArithDiv)
-    , ("/mod",     ArithDivmod)
-    , ("<",        LogicLt)
-    , ("=",        LogicXnor)
-    , (">",        LogicGt)
-    , ("abs",      ArithAbs)
-    , ("and",      LogicAnd)
-    , ("drop",     StackDrop)
-    , ("dup",      StackDuplicate)
-    , ("execute",  Execute)
-    , ("max",      ArithMax)
-    , ("min",      ArithMin)
-    , ("mod",      ArithMin)
-    , ("or",       LogicOr)
-    , ("over",     StackOver)
-    , ("rot",      StackRotate)
-    , ("swap",     StackSwap)
-    , ("<>",       LogicXor)
-    , ("nip",      StackNip)
-    , ("false",    LiteralFalse)
-    , ("true",     LiteralTrue)
-    , ("pick",     StackPick)
-    , ("roll",     StackRoll)
-    , ("tuck",     StackTuck)
-    , ("debugger", Debugger)
-    ]
+builtinSymbols = fromList [(show o, Operator o) | o <- [minBound..maxBound]]
 
 resolve :: Map String [MicroFactorInstruction ResolvedRef] -> [MicroFactorInstruction ParsedRef] -> Either (SourcePos, String) [MicroFactorInstruction ResolvedRef]
 resolve userDefs = resolveNames go
