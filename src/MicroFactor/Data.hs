@@ -24,7 +24,18 @@ data MicroFactorInstruction r
 data MicroFactorOperator
     = Execute
     | Debugger
-    | Exit
+    | ControlIte
+    | ControlIf
+    | ControlDo
+    | ControlWhen
+    | ControlUnless
+    | ControlForever
+    | ControlLoop
+    | ControlWhile
+    | ControlUntil
+    | ControlDip
+    | ControlKeep
+
     | LiteralFalse
     | LiteralTrue
     | LogicNot
@@ -137,7 +148,17 @@ instance InstructionRef Nested where
 instance Show MicroFactorOperator where
     show Execute        = "execute"
     show Debugger       = "debugger"
-    -- show Exit           = ""
+    show ControlIte     = "?"
+    show ControlIf      = "if"
+    show ControlDo      = "do"
+    show ControlWhen    = "when"
+    show ControlUnless  = "unless"
+    show ControlForever = "forever"
+    show ControlLoop    = "loop"
+    show ControlWhile   = "while"
+    show ControlUntil   = "until"
+    show ControlDip     = "dip"
+    show ControlKeep    = "keep"
     show LiteralFalse   = "false"
     show LiteralTrue    = "true"
     show LogicNot       = "not"

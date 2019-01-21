@@ -46,7 +46,7 @@ instance InstructionRef ResolvedRef where
 
 instance Show ResolvedRef where
     -- avoid showing circular structures in recursive functions
-    show (ResolvedRef "" is) = show is
+    show (ResolvedRef "" is) = "(" ++ show is ++ ")"
     show (ResolvedRef name _) = name
 
 --------------------------------------------------------------------------------
