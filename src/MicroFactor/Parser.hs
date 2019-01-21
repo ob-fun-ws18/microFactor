@@ -10,15 +10,11 @@ module MicroFactor.Parser
     , formatErrorMessages
     ) where
 
-import Data.Monoid ((<>))
 import Control.Monad
-import Control.Arrow (second)
 import Control.Applicative ((<|>))
 import Data.Functor (($>), (<&>))
 import Data.Char (digitToInt)
-import Data.Maybe (fromJust)
-import Data.Map.Strict (Map, fromList, toList, lookup)
-import Data.Tuple (swap)
+import Data.Map.Strict (Map, fromList, lookup)
 import Text.Parsec hiding ((<|>))
 import Text.Parsec.String (Parser)
 import Text.Parsec.Error
@@ -64,7 +60,7 @@ expressionParser = element `sepBy1` spaces
         , identifier
         ] <?> "expression item"
     identifier = Call <$> liftM2 Named getPosition identifierParser
-    parenthised = flip labels ["comment", "block"] $ do
+    parenthised = flip labels ["comment", "block"] do
         end <- choice [char a $> b | (a, b) <- [('(',')'), ('[',']'), ('{','}')]]
         choice
             [ Comment <$> do
@@ -79,7 +75,7 @@ expressionParser = element `sepBy1` spaces
         , many digit <&> parseNumber 10
         ]) <|> (many1 digit <&> parseNumber 10)
     parseNumber base = LiteralValue . foldl (\x -> ((base * x) +) . fromIntegral . digitToInt) 0
-    stringLiteral = flip label "string" $ do
+    stringLiteral = flip label "string" do
         delim <- many1 $ char '"'
         LiteralString <$> manyTill ((char '\\' >> choice
             [ char 'r' $> '\r'

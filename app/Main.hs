@@ -1,10 +1,8 @@
 module Main where
 
-import Control.Applicative ((<|>))
-import Control.Monad (forever, unless, forM_)
+import Control.Monad (forM_)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State
-import Control.Concurrent
 import Data.List (intercalate)
 import Data.Map.Strict
 import Text.Parsec (runParser)
@@ -26,8 +24,9 @@ data AppState = AppState
     , thread :: Thread ResolvedRef
 }
 
+repl :: StateT AppState IO ()
 repl = do
-    line <- liftIO $ do
+    line <- liftIO do
         setSGR [SetColor Foreground Vivid Blue]
         putStr "µ> "
         setSGR []
@@ -39,6 +38,8 @@ repl = do
             repl
         Right cmds -> run cmds
 
+
+run :: [Command] -> StateT AppState IO ()
 run [] = repl
 run (Quit:_) = return ()
 run (Define id val:cmds) = gets definitions >>= \defs -> case resolve defs val of -- TODO: create circular reference to updated `defs`
@@ -78,14 +79,14 @@ run (List:cmds) = do
     run cmds
 
 putErrorMessage :: ParseError -> StateT s IO ()
-putErrorMessage err = asWarning $ do
+putErrorMessage err = asWarning do
     let pos = errorPos err
     let msg = formatErrorMessages err
     putStrLn $ replicate (sourceColumn pos) ' ' ++ "  ^"
     putStrLn msg
 
 asWarning :: IO a -> StateT s IO ()
-asWarning print = liftIO $ do
+asWarning print = liftIO do
     setSGR [SetColor Background Dull Red, SetColor Foreground Vivid Green]
     print
     setSGR [] -- reset

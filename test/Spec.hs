@@ -1,12 +1,9 @@
-{-# LANGUAGE BinaryLiterals, LambdaCase #-}
-
 import Test.Tasty
 import Test.Tasty.HUnit
 
 import Control.Monad (foldM, unless)
 import Data.List (isInfixOf)
-import Data.Bifunctor (first)
-import Data.Map.Strict (Map, insert, empty)
+import Data.Map.Strict (Map, insert)
 import Text.Printf (printf)
 import Text.Parsec (runParser, errorPos)
 import Text.Parsec.Pos (SourcePos, newPos)
@@ -126,10 +123,13 @@ instance InstructionRef SimpleRef where
     resolveRef (B x) = x
     refName (N n) = n
     refName (B _) = ""
-toSimple (Named _ r) = N r
-toSimple (Anonymous is) = B $ fmap (fmap toSimple) is
 
-parse = fmap (fmap (fmap toSimple)) . runParser expressionParser () ""
+parse :: String -> Either ParseError [MicroFactorInstruction SimpleRef]
+parse = fmap (fmap (fmap (fmap toSimple))) (runParser expressionParser () "")
+  where
+    toSimple (Named _ r) = N r
+    toSimple (Anonymous is) = B $ fmap (fmap toSimple) is
+
 
 roundTrip :: String -> TestTree
 roundTrip exp = testCase ("round-trip "++exp) $ show <$> parse exp @?= Right exp

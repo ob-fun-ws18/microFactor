@@ -1,5 +1,3 @@
-{-# LANGUAGE DeriveFunctor #-}
-
 module MicroFactor.Data
     ( MicroFactorInstruction (..)
     , MicroFactorOperator (..)
@@ -17,7 +15,7 @@ data MicroFactorInstruction r
     | Wrapper (MicroFactorInstruction r)
     | Call r
     | Operator MicroFactorOperator
-    deriving (Eq, Functor)
+    deriving (Eq, Functor, Foldable, Traversable)
 
 -- could have been part of MicroFactorInstruction
 -- separate definition makes monad & traversable implementations simpler
@@ -98,21 +96,6 @@ instance Monad MicroFactorInstruction where
         LiteralAddress a -> LiteralAddress a
         LiteralString s -> LiteralString s
         Operator o -> Operator o
-
-instance Foldable MicroFactorInstruction where
-    foldr f z (Call c)    = f c z
-    foldr f z (Wrapper c) = foldr f z c
-    foldr _ z _           = z
-
-instance Traversable MicroFactorInstruction where
-    traverse f (Call c)    = Call <$> f c
-    traverse f (Wrapper c) = Wrapper <$> traverse f c
-    traverse _ x           = pure (case x of
-        Comment c -> Comment c
-        LiteralValue v -> LiteralValue v
-        LiteralAddress a -> LiteralAddress a
-        LiteralString s -> LiteralString s
-        Operator o -> Operator o)
 
 --------------------------------------------------------------------------------
 

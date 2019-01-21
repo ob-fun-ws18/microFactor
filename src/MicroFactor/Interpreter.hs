@@ -1,5 +1,3 @@
-{-# LANGUAGE NamedFieldPuns, RankNTypes, DeriveFunctor #-}
-
 module MicroFactor.Interpreter
     ( ThreadInterpreter
     , interpret
@@ -12,7 +10,6 @@ module MicroFactor.Interpreter
     , showValue
     ) where
 
-import Control.Monad
 import MicroFactor.Data
 
 data InterpreterError
@@ -70,7 +67,7 @@ instance Applicative (ThreadInterpreter r) where
     fi <*> a = fi >>= (`fmap` a)
 
 instance Monad (ThreadInterpreter r) where
-    return x = ThreadInterpreter $ \t -> InterpreterResult [] t (Right x)
+    return x = ThreadInterpreter \t -> InterpreterResult [] t (Right x)
     -- (>>=) :: forall r a b. ThreadInterpreter r a -> (a -> ThreadInterpreter r b) -> ThreadInterpreter r b
     m >>= f = ThreadInterpreter $ step . runInterpreter m
         where
@@ -80,7 +77,7 @@ instance Monad (ThreadInterpreter r) where
                 in InterpreterResult (o1 <> o2) t2 x2
             -- step interpreterLeftResult = interpreterLeftResult
             step (InterpreterResult o t (Left e)) = InterpreterResult o t (Left e)
-    fail e = ThreadInterpreter $ \t -> interpreterFailResult t $ TypeError e
+    fail e = ThreadInterpreter \t -> interpreterFailResult t $ TypeError e
 
 --------------------------------------------------------------------------------
 
@@ -91,11 +88,11 @@ interpreterFailResult t e = InterpreterResult [] t { returnStack = [] } $ Left e
 -- pushData :: TaggedValue r -> Thread r -> Thread r
 -- pushData x (t@Thread {dataStack}) = t { dataStack = x:dataStack }
 pushData :: TaggedValue r -> ThreadInterpreter r ()
-pushData x = ThreadInterpreter $ \t@Thread {dataStack} ->
+pushData x = ThreadInterpreter \t@Thread {dataStack} ->
     InterpreterResult [] t { dataStack = x:dataStack } (Right ())
 
 popData :: ThreadInterpreter r (TaggedValue r)
-popData = ThreadInterpreter $ \t -> case t of
+popData = ThreadInterpreter \t -> case t of
     Thread { dataStack = [] } -> interpreterFailResult t StackUnderflow
     Thread { dataStack = d:ds } -> InterpreterResult [] t { dataStack = ds } (Right d)
 
@@ -112,7 +109,7 @@ popDataInstructions = do
     val <- popData
     case val of
         Instructions r -> return r
-        _              -> ThreadInterpreter $ \t -> interpreterFailResult t InvalidExecutionToken
+        _              -> ThreadInterpreter \t -> interpreterFailResult t InvalidExecutionToken
 
 popDataInt :: ThreadInterpreter r Word
 popDataInt = do
@@ -140,7 +137,7 @@ interpretBinaryBool op = do
     pushData $ Boolean $ op a b
 
 interpretStack :: (forall a. [a] -> Maybe [a]) -> ThreadInterpreter r ()
-interpretStack manip = ThreadInterpreter $ \t@Thread {dataStack} ->
+interpretStack manip = ThreadInterpreter \t@Thread {dataStack} ->
     case manip dataStack of
         Just dataStack -> InterpreterResult [] t {dataStack} (Right ())
         Nothing -> interpreterFailResult t StackUnderflow
@@ -159,11 +156,11 @@ interpret = runInterpreter . interpreter
 
 interpreterCall :: InstructionRef a => a -> [MicroFactorInstruction a] -> ThreadInterpreter a ()
 -- interpreterCall r is = interpreter (resolveRef r) >> interpreter is
-interpreterCall r is = ThreadInterpreter $ \t@Thread { returnStack } ->
+interpreterCall r is = ThreadInterpreter \t@Thread { returnStack } ->
     runInterpreter (interpreter $ resolveRef r) t { returnStack = makeRef is:returnStack }
 
 interpreter :: InstructionRef a => [MicroFactorInstruction a] -> ThreadInterpreter a ()
-interpreter [] = ThreadInterpreter $ \t -> case t of
+interpreter [] = ThreadInterpreter \t -> case t of
     Thread { returnStack = [] } -> InterpreterResult [] t (Right ())
     Thread { returnStack = r:rs } -> runInterpreter (interpreter $ resolveRef r) t { returnStack = rs }
 interpreter (Call r:is) = interpreterCall r is
@@ -239,7 +236,7 @@ interpreter (i:is) = (\() -> interpreter is) =<< case i of
     Comment _ -> return ()
     LiteralValue w -> pushData (Integer w)
     LiteralAddress w -> pushData (PortAddress w)
-    LiteralString s -> ThreadInterpreter $ \t -> InterpreterResult [s] t (Right ())
+    LiteralString s -> ThreadInterpreter \t -> InterpreterResult [s] t (Right ())
     Wrapper i -> pushData $ Instructions (case i of
         Call is -> is
         _ -> makeRef [i])
@@ -252,25 +249,25 @@ interpreter (i:is) = (\() -> interpreter is) =<< case i of
     Operator LiteralFalse -> pushData (Boolean False)
     Operator LiteralTrue -> pushData (Boolean True)
     Operator LogicNot -> popDataBool >>= pushData . Boolean . not
-    Operator LogicNor -> interpretBinaryBool $ \a b -> not (a || b)
+    Operator LogicNor -> interpretBinaryBool \a b -> not (a || b)
     Operator LogicLt -> interpretCompare (<)
     Operator LogicGt -> interpretCompare (>)
     Operator LogicXor -> interpretCompare (/=) -- Neq
-    Operator LogicNand -> interpretBinaryBool $ \a b -> not (a && b)
+    Operator LogicNand -> interpretBinaryBool \a b -> not (a && b)
     Operator LogicAnd -> interpretBinaryBool (&&)
     Operator LogicXnor -> interpretCompare (==) -- Eq
     Operator LogicLte -> interpretCompare (<=) -- Impl
     Operator LogicGte -> interpretCompare (>=)
     Operator LogicOr -> interpretBinaryBool (||)
-    Operator StackNip -> interpretStack $ \s -> case s of d:_:ds -> Just (d:ds); _ -> Nothing
+    Operator StackNip -> interpretStack \case d:_:ds -> Just (d:ds); _ -> Nothing
     Operator StackDrop -> popData >> return ()
     -- Operator StackPick
-    Operator StackDuplicate -> interpretStack $ \s -> case s of d:ds -> Just (d:d:ds); _ -> Nothing -- pick 0
-    Operator StackOver -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d2:d1:d2:ds); _ -> Nothing -- pick 1
-    Operator StackTuck -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d1:d2:d1:ds); _ -> Nothing
+    Operator StackDuplicate -> interpretStack \case d:ds -> Just (d:d:ds); _ -> Nothing -- pick 0
+    Operator StackOver -> interpretStack \case d1:d2:ds -> Just (d2:d1:d2:ds); _ -> Nothing -- pick 1
+    Operator StackTuck -> interpretStack \case d1:d2:ds -> Just (d1:d2:d1:ds); _ -> Nothing
     -- Operator StackRoll
-    Operator StackSwap -> interpretStack $ \s -> case s of d1:d2:ds -> Just (d2:d1:ds); _ -> Nothing -- roll 1
-    Operator StackRotate -> interpretStack $ \s -> case s of d1:d2:d3:ds -> Just (d3:d1:d2:ds); _ -> Nothing -- roll 2
+    Operator StackSwap -> interpretStack \case d1:d2:ds -> Just (d2:d1:ds); _ -> Nothing -- roll 1
+    Operator StackRotate -> interpretStack \case d1:d2:d3:ds -> Just (d3:d1:d2:ds); _ -> Nothing -- roll 2
 
     Operator ArithAdd -> interpretBinaryInt (+)
     Operator ArithSub -> interpretBinaryInt (-)
@@ -284,7 +281,7 @@ interpreter (i:is) = (\() -> interpreter is) =<< case i of
 
     Operator Send -> do
         val <- popData
-        ThreadInterpreter $ \t -> InterpreterResult [showValue val] t (Right ())
+        ThreadInterpreter \t -> InterpreterResult [showValue val] t (Right ())
 
 showValue :: TaggedValue a -> String
 showValue (Boolean b) = show b
