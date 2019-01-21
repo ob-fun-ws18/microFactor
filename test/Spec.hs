@@ -1,14 +1,16 @@
-{-# LANGUAGE BinaryLiterals #-}
+{-# LANGUAGE BinaryLiterals, LambdaCase #-}
 
 import Test.Tasty
 import Test.Tasty.HUnit
 
-import Control.Monad (foldM)
+import Control.Monad (foldM, unless)
+import Data.List (isInfixOf)
 import Data.Bifunctor (first)
 import Data.Map.Strict (Map, insert, empty)
 import Text.Printf (printf)
 import Text.Parsec (runParser, errorPos)
 import Text.Parsec.Pos (SourcePos, newPos)
+import Text.Parsec.Error
 
 import MicroFactor
 
@@ -22,11 +24,13 @@ main = defaultMain $ testGroup "Microfactor"
         , parse "(*comment *)" @?= Right [Comment "comment"]
         , parse "(* comment*)" @?= Right [Comment "comment"]
         , parse "(*comment*)" @?= Right [Comment "comment"]
+        , parse "(* com*ment * *)" @?= Right [Comment "com*ment *"]
         , parse "[- comment -]" @?= Right [Comment "comment"]
         , parse "{* comment *}" @?= Right [Comment "comment"]
         , parse "(# comment #)" @?= Right [Comment "comment"]
         , parse "{- comment -}" @?= Right [Comment "comment"]
         , parse "a (b c) d" @?= Right [Call $ N "a", Wrapper $ Call $ B [Call $ N "b", Call $ N "c"], Call $ N "d"]
+        , parse "( space )" @?= Right [Wrapper $ Call $ B [Call $ N "space"]]
         , parse "0" @?= Right [LiteralValue 0]
         , parse "0xa 0x1 0x05bd" @?= Right [LiteralValue 0xa, LiteralValue 0x1, LiteralValue 0x05bd]
         , parse "0xAB10" @?= Right [LiteralValue 0xab10]
@@ -35,6 +39,12 @@ main = defaultMain $ testGroup "Microfactor"
         , parse "\"string\"" @?= Right [LiteralString "string"]
         , parse "\"\\n\\r\\t\\\\ \\x\"" @?= Right [LiteralString "\n\r\t\\ x"]
         , parse "\"\" \" \"\"" @?= Right [LiteralString " \" "]
+        ] ++ fromAssertions "parse error"
+        [ parse "" @?: [errorContainsMessage "unexpected end of input", errorIsInColumn 1]
+        , parse "example " @?: [errorContainsMessage "unexpected end of input", errorIsInColumn 9]
+        , parse "[# comm?" @?: [errorContainsMessage "expecting white space or \"#\"", errorIsInColumn 9]
+        , parse "(" @?: [errorContainsMessage "unexpected end of input", errorIsInColumn 2]
+        , parse "(x " @?: [errorContainsMessage "unexpected end of input", errorContainsMessage "expecting space, expression item or \")\"", errorIsInColumn 4]
         ] ++
         [ testCase "resolve" $ parseContext [("hello", "1"), ("world", "2")] "world (\"oh\" 'hello) execute" @?= Right
             [ Call $ ResolvedRef "world" [LiteralValue 2]
@@ -44,6 +54,14 @@ main = defaultMain $ testGroup "Microfactor"
             , Operator Execute]
         , roundTrip "1 2 \"string\" (* comment *)"
         , roundTrip "example (oh 'well) !"
+        , testCase "round-trip all ops" $ let ops = fmap Operator [minBound..] :: [MicroFactorInstruction ResolvedRef]
+            in parseAndResolve mempty (show ops) @?= Right ops
+        , testCase "wrapper" $ parseAndResolve mempty "1 dup (drop) 'swap" @?= Right
+            [LiteralValue 1
+            , Operator StackDuplicate
+            , Wrapper $ Call $ ResolvedRef "" [Operator StackDrop]
+            , Wrapper $ Operator StackSwap]
+        , testCase "unknown identifier" $ parseAndResolve mempty "'example" @?: [errorContainsMessage "unknown identifier example", errorIsInColumn 2]
         ]
     , testGroup "Commands"
         [ testCase "simple declaration" $ runParser commandParser () "" ":test 1 + 1;" @?= Right
@@ -83,6 +101,23 @@ fromAssertions :: String -> [Assertion] -> [TestTree]
 fromAssertions name =
     zipWith testCase [printf "[%2d] %s" n name | n <- [1 :: Int ..]]
 
+(@?:) :: a -> [a -> Assertion] -> Assertion
+actual @?: asserts = mapM_ ($ actual) asserts
+
+{- uh no
+deriving instance Show Message
+errorContainsMessage :: Message -> Either ParseError a -> Assertion
+msg `elem` errorMessages err -- doesn't work as you might expect
+-}
+errorContainsMessage :: String -> Either ParseError a -> Assertion
+errorContainsMessage msg = let fail = assertFailure . ((++) $ "expected error to contain " ++ show msg ++ ",\n but got ") in \case
+    (Left err) -> unless (msg `isInfixOf` show err) $ fail $ show err
+    (Right _) -> fail "no error at all"
+
+errorIsInColumn :: Int -> Either ParseError a -> Assertion
+errorIsInColumn col (Left err) = errorPos err @?= column col
+errorIsInColumn col (Right _) = assertFailure $ "expected error in column " ++ show col ++ " but got no error at all"
+
 -- like ParsedRef but without source position
 data SimpleRef = N String | B [MicroFactorInstruction SimpleRef] deriving (Eq, Show)
 instance InstructionRef SimpleRef where
@@ -102,12 +137,10 @@ roundTrip exp = testCase ("round-trip "++exp) $ show <$> parse exp @?= Right exp
 column :: Int -> SourcePos
 column = newPos "" 1
 
-parseAndResolve :: Map String [MicroFactorInstruction ResolvedRef] -> String -> Either (SourcePos, String) [MicroFactorInstruction ResolvedRef]
-parseAndResolve ctx str = do
-    exp <- first (\e -> (errorPos e, "parse error")) $ runParser expressionParser () "" str
-    resolve ctx exp
+parseAndResolve :: Map String [MicroFactorInstruction ResolvedRef] -> String -> Either ParseError [MicroFactorInstruction ResolvedRef]
+parseAndResolve ctx str = runParser expressionParser () "" str >>= resolve ctx
 
-parseContext :: [(String, String)] -> String -> Either (SourcePos, String) [MicroFactorInstruction ResolvedRef]
+parseContext :: [(String, String)] -> String -> Either ParseError [MicroFactorInstruction ResolvedRef]
 parseContext list exp = do
     userDefs <- foldM (\m (id, v) -> insert id <$> parseAndResolve m v <*> pure m) mempty list
     parseAndResolve userDefs exp

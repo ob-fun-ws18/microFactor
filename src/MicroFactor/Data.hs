@@ -69,20 +69,19 @@ data MicroFactorOperator
     | ArithAbs
     | ArithMax
     | ArithMin
-{-
-    MICROFACTOR_INSTRUCTION_PUSH_OWN_PORTADDRESS,
-    MICROFACTOR_INSTRUCTION_READ_FIELD,
-    MICROFACTOR_INSTRUCTION_WRITE_FIELD,
-    MICROFACTOR_INSTRUCTION_INPUT,
-    MICROFACTOR_INSTRUCTION_OUTPUT,
-    MICROFACTOR_INSTRUCTION_RANDOM,
--}
+
     | Send
-    | Yield
-    | YieldDelay
-    | YieldInput
-    | ThreadStart
-    | ThreadPass
+    -- | Yield
+    -- | YieldDelay
+    -- | YieldInput
+    -- | ThreadStart
+    -- | ThreadPass
+    -- | OwnPortAddress
+    -- | ReadField
+    -- | WriteField
+    -- | Input
+    -- | Output
+    -- | Random
     deriving (Eq, Ord, Enum, Bounded)
 
 instance Applicative MicroFactorInstruction where
@@ -196,7 +195,7 @@ instance Show MicroFactorOperator where
     -- show YieldInput     = ""
     -- show ThreadStart    = ""
     -- show ThreadPass     = ""
-    show _ = ""
+    -- show _ = ""
 
 instance InstructionRef r => Show (MicroFactorInstruction r) where
     show (Comment c) = "(* " ++ c ++ " *)"

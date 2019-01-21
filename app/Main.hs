@@ -35,23 +35,23 @@ repl = do
         getLine
     case runParser commandParser () "" line of
         Left e -> do
-            putErrorMessage (errorPos e) $ showErrorMessages "or" "oops?" "expecting" "unexpected" "end of input" $ errorMessages e
+            putErrorMessage e
             repl
         Right cmds -> run cmds
 
 run [] = repl
 run (Quit:_) = return ()
 run (Define id val:cmds) = gets definitions >>= \defs -> case resolve defs val of -- TODO: create circular reference to updated `defs`
-    Left (pos, name) -> do
-        putErrorMessage pos $ "unknown identifier " ++ name
+    Left e -> do
+        putErrorMessage e
         repl -- dismiss other cmds
     Right rval -> do
         modify (\state -> state { definitions = insert id rval (definitions state) })
         liftIO $ putStrLn $ "Defined " ++ id
         run cmds
 run (Evaluate exp:cmds) = gets definitions >>= \defs -> case resolve defs exp of
-    Left (pos, name) -> do
-        putErrorMessage pos $ "unknown identifier " ++ name
+    Left e -> do
+        putErrorMessage e
         repl -- dismiss other cmds
     Right rval -> do
         -- print rval
@@ -77,8 +77,10 @@ run (List:cmds) = do
     liftIO $ putStrLn $ unwords $ keys userFns
     run cmds
 
-putErrorMessage :: SourcePos -> String -> StateT s IO ()
-putErrorMessage pos msg = asWarning $ do
+putErrorMessage :: ParseError -> StateT s IO ()
+putErrorMessage err = asWarning $ do
+    let pos = errorPos err
+    let msg = formatErrorMessages err
     putStrLn $ replicate (sourceColumn pos) ' ' ++ "  ^"
     putStrLn msg
 

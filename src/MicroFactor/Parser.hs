@@ -7,6 +7,7 @@ module MicroFactor.Parser
     , builtinSymbols
     , commandParser
     , resolve
+    , formatErrorMessages
     ) where
 
 import Data.Monoid ((<>))
@@ -18,8 +19,9 @@ import Data.Char (digitToInt)
 import Data.Maybe (fromJust)
 import Data.Map.Strict (Map, fromList, toList, lookup)
 import Data.Tuple (swap)
-import Text.Parsec.String (Parser)
 import Text.Parsec hiding ((<|>))
+import Text.Parsec.String (Parser)
+import Text.Parsec.Error
 import Prelude hiding (lookup)
 
 import MicroFactor.Data
@@ -52,7 +54,7 @@ instance Show ResolvedRef where
 --------------------------------------------------------------------------------
 
 expressionParser :: Parser [MicroFactorInstruction ParsedRef]
-expressionParser = element `sepBy1` spaces -- TODO: require at least 1 space?
+expressionParser = element `sepBy1` spaces
   where
     element = choice
         [ parenthised
@@ -60,7 +62,7 @@ expressionParser = element `sepBy1` spaces -- TODO: require at least 1 space?
         , stringLiteral
         , Wrapper <$> (char '\'' *> identifier)
         , identifier
-        ]
+        ] <?> "expression item"
     identifier = Call <$> liftM2 Named getPosition identifierParser
     parenthised = flip labels ["comment", "block"] $ do
         end <- choice [char a $> b | (a, b) <- [('(',')'), ('[',']'), ('{','}')]]
@@ -69,7 +71,7 @@ expressionParser = element `sepBy1` spaces -- TODO: require at least 1 space?
                 delim <- oneOf "#-*"
                 spaces
                 manyTill anyChar $ try $ spaces >> char delim >> char end
-            , Wrapper . Call . Anonymous <$> (spaces *> expressionParser <* spaces <* char end)
+            , Wrapper . Call . Anonymous <$> (spaces *> element `sepEndBy1` spaces <* char end)
             ]
     numberLiteral = flip label "number" $ (char '0' >> choice
         [ char 'x' >> many1 hexDigit <&> parseNumber 16
@@ -122,10 +124,13 @@ resolveNames f = fmap (fmap join) . traverse (traverse f)
 builtinSymbols :: Map String (MicroFactorInstruction a)
 builtinSymbols = fromList [(show o, Operator o) | o <- [minBound..maxBound]]
 
-resolve :: Map String [MicroFactorInstruction ResolvedRef] -> [MicroFactorInstruction ParsedRef] -> Either (SourcePos, String) [MicroFactorInstruction ResolvedRef]
+resolve :: Map String [MicroFactorInstruction ResolvedRef] -> [MicroFactorInstruction ParsedRef] -> Either ParseError [MicroFactorInstruction ResolvedRef]
 resolve userDefs = resolveNames go
   where
-    go :: ParsedRef -> Either (SourcePos, String) (MicroFactorInstruction ResolvedRef)
+    go :: ParsedRef -> Either ParseError (MicroFactorInstruction ResolvedRef)
     go (Anonymous is) = fmap (Call . ResolvedRef "") (resolveNames go is)
-    go (Named loc name) = maybe (Left (loc, name)) Right $
+    go (Named loc name) = maybe (Left $ newErrorMessage (Message $ "unknown identifier " ++ name) loc) Right $
         lookup name builtinSymbols <|> fmap (Call . ResolvedRef name) (lookup name userDefs)
+
+formatErrorMessages :: ParseError -> String
+formatErrorMessages = showErrorMessages "or" "oops?" "expecting" "unexpected" "end of input" . errorMessages
