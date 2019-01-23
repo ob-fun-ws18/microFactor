@@ -56,7 +56,7 @@ expressionParser = element `sepBy1` spaces
         [ parenthised
         , numberLiteral
         , stringLiteral
-        , Wrapper <$> (char '\'' *> identifier)
+        , Literal . Instruction <$> (char '\'' *> identifier)
         , identifier
         ] <?> "expression item"
     identifier = Call <$> liftM2 Named getPosition identifierParser
@@ -67,14 +67,14 @@ expressionParser = element `sepBy1` spaces
                 delim <- oneOf "#-*"
                 spaces
                 manyTill anyChar $ try $ spaces >> char delim >> char end
-            , Wrapper . Call . Anonymous <$> (spaces *> element `sepEndBy1` spaces <* char end)
+            , Literal . Instruction . Call . Anonymous <$> (spaces *> element `sepEndBy1` spaces <* char end)
             ]
     numberLiteral = flip label "number" $ (char '0' >> choice
         [ char 'x' >> many1 hexDigit <&> parseNumber 16
         , char 'b' >> many1 (oneOf "01") <&> parseNumber 2
         , many digit <&> parseNumber 10
         ]) <|> (many1 digit <&> parseNumber 10)
-    parseNumber base = LiteralValue . foldl (\x -> ((base * x) +) . fromIntegral . digitToInt) 0
+    parseNumber base = Literal . Integer . foldl (\x -> ((base * x) +) . fromIntegral . digitToInt) 0
     stringLiteral = flip label "string" do
         delim <- many1 $ char '"'
         LiteralString <$> manyTill ((char '\\' >> choice
@@ -117,8 +117,8 @@ commandParser = choice
 resolveNames :: (a -> Either b (MicroFactorInstruction c)) -> [MicroFactorInstruction a] -> Either b [MicroFactorInstruction c]
 resolveNames f = fmap (fmap join) . traverse (traverse f)
 
-builtinSymbols :: Map String (MicroFactorInstruction a)
-builtinSymbols = fromList [(show o, Operator o) | o <- [minBound..maxBound]]
+builtinSymbols :: InstructionRef r => Map String (MicroFactorInstruction r)
+builtinSymbols = fromList $ fmap (show >>= (,)) $ fmap Operator [minBound..maxBound] ++ fmap (Literal . Boolean) [True, False]
 
 resolve :: Map String [MicroFactorInstruction ResolvedRef] -> [MicroFactorInstruction ParsedRef] -> Either ParseError [MicroFactorInstruction ResolvedRef]
 resolve userDefs = resolveNames go

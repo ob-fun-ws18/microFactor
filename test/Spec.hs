@@ -15,8 +15,8 @@ main :: IO ()
 main = defaultMain $ testGroup "Microfactor"
     [ testGroup "Parser" $ fromAssertions "parse"
         [ parse "example" @?= Right [Call $ N "example"]
-        , parse "'example" @?= Right [Wrapper $ Call $ N "example"]
-        , parse "'example example" @?= Right [Wrapper $ Call $ N "example", Call $ N "example"]
+        , parse "'example" @?= Right [callWrapper $ N "example"]
+        , parse "'example example" @?= Right [callWrapper $ N "example", Call $ N "example"]
         , parse "(* comment *)" @?= Right [Comment "comment"]
         , parse "(*comment *)" @?= Right [Comment "comment"]
         , parse "(* comment*)" @?= Right [Comment "comment"]
@@ -26,13 +26,13 @@ main = defaultMain $ testGroup "Microfactor"
         , parse "{* comment *}" @?= Right [Comment "comment"]
         , parse "(# comment #)" @?= Right [Comment "comment"]
         , parse "{- comment -}" @?= Right [Comment "comment"]
-        , parse "a (b c) d" @?= Right [Call $ N "a", Wrapper $ Call $ B [Call $ N "b", Call $ N "c"], Call $ N "d"]
-        , parse "( space )" @?= Right [Wrapper $ Call $ B [Call $ N "space"]]
-        , parse "0" @?= Right [LiteralValue 0]
-        , parse "0xa 0x1 0x05bd" @?= Right [LiteralValue 0xa, LiteralValue 0x1, LiteralValue 0x05bd]
-        , parse "0xAB10" @?= Right [LiteralValue 0xab10]
-        , parse "123 456" @?= Right [LiteralValue 123, LiteralValue 456]
-        , parse "0b1010" @?= Right [LiteralValue 0b1010]
+        , parse "a (b c) d" @?= Right [Call $ N "a", callWrapper $ B [Call $ N "b", Call $ N "c"], Call $ N "d"]
+        , parse "( space )" @?= Right [callWrapper $ B [Call $ N "space"]]
+        , parse "0" @?= Right [literalValue 0]
+        , parse "0xa 0x1 0x05bd" @?= Right [literalValue 0xa, literalValue 0x1, literalValue 0x05bd]
+        , parse "0xAB10" @?= Right [literalValue 0xab10]
+        , parse "123 456" @?= Right [literalValue 123, literalValue 456]
+        , parse "0b1010" @?= Right [literalValue 0b1010]
         , parse "\"string\"" @?= Right [LiteralString "string"]
         , parse "\"\\n\\r\\t\\\\ \\x\"" @?= Right [LiteralString "\n\r\t\\ x"]
         , parse "\"\" \" \"\"" @?= Right [LiteralString " \" "]
@@ -44,25 +44,25 @@ main = defaultMain $ testGroup "Microfactor"
         , parse "(x " @?: [errorContainsMessage "unexpected end of input", errorContainsMessage "expecting space, expression item or \")\"", errorIsInColumn 4]
         ] ++
         [ testCase "resolve" $ parseContext [("hello", "1"), ("world", "2")] "world (\"oh\" 'hello) execute" @?= Right
-            [ Call $ ResolvedRef "world" [LiteralValue 2]
-            , Wrapper $ Call $ ResolvedRef ""
+            [ Call $ ResolvedRef "world" [literalValue 2]
+            , callWrapper $ ResolvedRef ""
                 [ LiteralString "oh"
-                , Wrapper $ Call $ ResolvedRef "hello" [LiteralValue 1]]
+                , callWrapper $ ResolvedRef "hello" [literalValue 1]]
             , Operator Execute]
         , roundTrip "1 2 \"string\" (* comment *)"
         , roundTrip "example (oh 'well) !"
         , testCase "round-trip all ops" $ let ops = fmap Operator [minBound..] :: [MicroFactorInstruction ResolvedRef]
             in parseAndResolve mempty (show ops) @?= Right ops
         , testCase "wrapper" $ parseAndResolve mempty "1 dup (drop) 'swap" @?= Right
-            [LiteralValue 1
+            [literalValue 1
             , Operator StackDuplicate
-            , Wrapper $ Call $ ResolvedRef "" [Operator StackDrop]
-            , Wrapper $ Operator StackSwap]
+            , callWrapper $ ResolvedRef "" [Operator StackDrop]
+            , Literal $ Instruction $ Operator StackSwap]
         , testCase "unknown identifier" $ parseAndResolve mempty "'example" @?: [errorContainsMessage "unknown identifier example", errorIsInColumn 2]
         ]
     , testGroup "Commands"
         [ testCase "simple declaration" $ runParser commandParser () "" ":test 1 + 1;" @?= Right
-            [Define "test" [LiteralValue 1, Call $ Named (column 9) "+", LiteralValue 1]]
+            [Define "test" [literalValue 1, Call $ Named (column 9) "+", literalValue 1]]
         ]
     , testGroup "Interpreter"
         [ testInterpreter (dataStack . interpreterThread) [] "1 2 +" [Integer 3]
@@ -130,6 +130,11 @@ parse = fmap (fmap (fmap (fmap toSimple))) (runParser expressionParser () "")
     toSimple (Named _ r) = N r
     toSimple (Anonymous is) = B $ fmap (fmap toSimple) is
 
+callWrapper :: a -> MicroFactorInstruction a
+callWrapper = Literal . Instruction . Call
+
+literalValue :: Word -> MicroFactorInstruction a
+literalValue = Literal . Integer
 
 roundTrip :: String -> TestTree
 roundTrip exp = testCase ("round-trip "++exp) $ show <$> parse exp @?= Right exp

@@ -74,7 +74,7 @@ run (ShowDef id:cmds) = do
     run cmds
 run (List:cmds) = do
     userFns <- gets definitions
-    liftIO $ putStrLn $ unwords $ keys builtinSymbols
+    liftIO $ putStrLn $ unwords $ keys (builtinSymbols :: Map String (MicroFactorInstruction ResolvedRef))
     liftIO $ putStrLn $ unwords $ keys userFns
     run cmds
 

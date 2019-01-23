@@ -3,7 +3,6 @@ module MicroFactor.Interpreter
     , interpret
     , InterpreterError (..)
     , ThreadState (..)
-    , TaggedValue (..)
     , InterpreterResult (..)
     , Thread (..)
     , newThread
@@ -27,13 +26,6 @@ data ThreadState
     | Yielded
     | Waiting
     deriving (Eq, Show)
-
-data TaggedValue r
-    = Boolean Bool
-    | Integer Word
-    | PortAddress Word
-    | Instructions r
-    deriving (Eq, Show, Functor)
 
 data Thread r = Thread {
     stopPending :: Bool,
@@ -68,10 +60,10 @@ instance Applicative (ThreadInterpreter r) where
 
 instance Monad (ThreadInterpreter r) where
     return x = ThreadInterpreter \t -> InterpreterResult [] t (Right x)
-    -- (>>=) :: forall r a b. ThreadInterpreter r a -> (a -> ThreadInterpreter r b) -> ThreadInterpreter r b
+    (>>=) :: forall r a b. ThreadInterpreter r a -> (a -> ThreadInterpreter r b) -> ThreadInterpreter r b
     m >>= f = ThreadInterpreter $ step . runInterpreter m
         where
-            -- step :: InterpreterResult r a -> InterpreterResult r b
+            step :: InterpreterResult r a -> InterpreterResult r b
             step (InterpreterResult o1 t1 (Right x1)) =
                 let InterpreterResult o2 t2 x2 = runInterpreter (f x1) t1
                 in InterpreterResult (o1 <> o2) t2 x2
@@ -85,16 +77,22 @@ instance Monad (ThreadInterpreter r) where
 interpreterFailResult :: Thread r -> InterpreterError -> InterpreterResult r a
 interpreterFailResult t e = InterpreterResult [] t { returnStack = [] } $ Left e
 
+-- put a value on the data stack
 -- pushData :: TaggedValue r -> Thread r -> Thread r
 -- pushData x (t@Thread {dataStack}) = t { dataStack = x:dataStack }
 pushData :: TaggedValue r -> ThreadInterpreter r ()
 pushData x = ThreadInterpreter \t@Thread {dataStack} ->
     InterpreterResult [] t { dataStack = x:dataStack } (Right ())
 
+-- remove a value from the data stack
 popData :: ThreadInterpreter r (TaggedValue r)
 popData = ThreadInterpreter \t -> case t of
     Thread { dataStack = [] } -> interpreterFailResult t StackUnderflow
     Thread { dataStack = d:ds } -> InterpreterResult [] t { dataStack = ds } (Right d)
+
+-- read the top value from the data stack
+-- getData :: ThreadInterpreter r (TaggedValue r)
+-- getData = popData >>= (pushData >>= ($>))
 
 popDataBool :: ThreadInterpreter r Bool
 popDataBool = do
@@ -102,21 +100,22 @@ popDataBool = do
     case val of
         Boolean b -> return b
         Integer w -> return (w /= 0)
-        x -> fail $ "expected Boolean (or Integer)" -- "but got" ++ show x
+        x         -> fail $ "expected Boolean (or Integer)" -- "but got" ++ show x
 
-popDataInstructions :: ThreadInterpreter r r
-popDataInstructions = do
+popDataInstruction :: ThreadInterpreter r (MicroFactorInstruction r)
+popDataInstruction = do
     val <- popData
     case val of
-        Instructions r -> return r
-        _              -> ThreadInterpreter \t -> interpreterFailResult t InvalidExecutionToken
+        Instruction r -> return r
+        _             -> ThreadInterpreter \t -> interpreterFailResult t InvalidExecutionToken
 
 popDataInt :: ThreadInterpreter r Word
 popDataInt = do
     val <- popData
     case val of
         Integer w -> return w
-        _ -> fail $ "expected Integer"
+        _         -> fail $ "expected Integer"
+
 
 interpretCompare :: (forall c. Ord c => c -> c -> Bool) -> ThreadInterpreter r ()
 interpretCompare comp = do
@@ -126,8 +125,8 @@ interpretCompare comp = do
         (Boolean a, Boolean b) -> pushData $ Boolean $ comp a b
         (Integer a, Integer b) -> pushData $ Boolean $ comp a b
         (PortAddress a, PortAddress b) -> pushData $ Boolean $ comp a b
-        (Instructions _, _) -> fail "cannot compare Instructions"
-        (_, Instructions _) -> fail "cannot compare Instructions"
+        (Instruction _, _) -> fail "cannot compare Instructions"
+        (_, Instruction _) -> fail "cannot compare Instructions"
         _ -> fail "can only compare values of same type" -- tried show a with show b
 
 interpretBinaryBool :: (Bool -> Bool -> Bool) -> ThreadInterpreter r ()
@@ -140,7 +139,7 @@ interpretStack :: (forall a. [a] -> Maybe [a]) -> ThreadInterpreter r ()
 interpretStack manip = ThreadInterpreter \t@Thread {dataStack} ->
     case manip dataStack of
         Just dataStack -> InterpreterResult [] t {dataStack} (Right ())
-        Nothing -> interpreterFailResult t StackUnderflow
+        Nothing        -> interpreterFailResult t StackUnderflow
 
 
 interpretBinaryInt :: (Word -> Word -> Word) -> ThreadInterpreter r ()
@@ -148,6 +147,12 @@ interpretBinaryInt op = do
     b <- popDataInt
     a <- popDataInt
     pushData $ Integer $ op a b
+
+wrapper :: MicroFactorInstruction r -> MicroFactorInstruction r
+wrapper = Literal . Instruction
+
+wrapRef :: InstructionRef r => [MicroFactorInstruction r] -> MicroFactorInstruction r
+wrapRef = wrapper . Call . makeRef
 
 --------------------------------------------------------------------------------
 
@@ -164,90 +169,72 @@ interpreter [] = ThreadInterpreter \t -> case t of
     Thread { returnStack = [] } -> InterpreterResult [] t (Right ())
     Thread { returnStack = r:rs } -> runInterpreter (interpreter $ resolveRef r) t { returnStack = rs }
 interpreter (Call r:is) = interpreterCall r is
-interpreter (Operator Execute:is) = popDataInstructions >>= \r -> interpreterCall r is
+interpreter (Operator Execute:is) = popDataInstruction >>= \r -> interpreter $ r : is
 interpreter (Operator ControlIf:is) = do
-    else' <- popDataInstructions
-    then' <- popDataInstructions
+    else' <- popDataInstruction
+    then' <- popDataInstruction
     cond <- popDataBool
-    interpreterCall (if cond then then' else else') is
+    interpreter $ (if cond then then' else else') : is
 interpreter (Operator ControlWhen:is) = do
-    then' <- popDataInstructions
+    then' <- popDataInstruction
     cond <- popDataBool
-    if cond then interpreterCall then' is else interpreter is
+    if cond then interpreter $ then' : is else interpreter is
 interpreter (Operator ControlUnless:is) = do
-    else' <- popDataInstructions
+    else' <- popDataInstruction
     cond <- popDataBool
-    if cond then interpreter is else interpreterCall else' is
+    if cond then interpreter is else interpreter $ else' : is
 interpreter (Operator ControlForever:is) = do
-    body <- popDataInstructions
-    -- interpreter $ repeat (Call body)
-    interpreterCall body (Wrapper (Call body) : Operator ControlForever : is)
+    body <- popDataInstruction
+    -- interpreter $ repeat body
+    interpreter (body : wrapper body : Operator ControlForever : is)
 interpreter (Operator ControlLoop:is) = do
-    body <- popDataInstructions
+    body <- popDataInstruction
     {-- first attempt:
-    let rep = Wrapper (Call $ makeRef [Wrapper (Call body), Operator ControlLoop])
-    interpreterCall body (rep : Operator ControlWhen : is) -}
-    let rep = Wrapper (Call $ makeRef [Call body, rep, Operator ControlWhen])
-    interpreterCall body (rep : Operator ControlWhen : is)
+    let rep = wrapRef [wrapper body, Operator ControlLoop]
+    interpreter (body : rep : Operator ControlWhen : is) -}
+    let rep = wrapRef [body, rep, Operator ControlWhen]
+    interpreter (body : rep : Operator ControlWhen : is)
 interpreter (Operator ControlWhile:is) = do
-    body <- popDataInstructions
-    pred <- popDataInstructions
+    body <- popDataInstruction
+    pred <- popDataInstruction
     {-- first attempt:
-    let rep = Wrapper (Call $ makeRef [Call body, Call pred, rep, Operator ControlWhen])
-    interpreterCall pred (rep : Operator ControlWhen : is) -}
-    let rep = Wrapper (Call $ makeRef (Call body : go))
-        go = [Call pred, rep, Wrapper (Call $ makeRef is), Operator ControlIf]
+    let rep = wrapper [body, pred, rep, Operator ControlWhen]
+    interpreter (pred : rep : Operator ControlWhen : is) -}
+    let rep = wrapRef (body : go)
+        go = [pred, rep, wrapRef is, Operator ControlIf]
     interpreter go
 interpreter (Operator ControlUntil:is) = do
-    body <- popDataInstructions
-    pred <- popDataInstructions
+    body <- popDataInstruction
+    pred <- popDataInstruction
     {-- first attempt:
-    let rep = Wrapper (Call $ makeRef [Call body, Call pred, rep, Operator ControlUnless])
-    interpreterCall pred (rep : Operator ControlUnless : is) -}
-    let rep = Wrapper (Call $ makeRef (Call body : go))
-        go = [Call pred, Wrapper (Call $ makeRef is), rep, Operator ControlIf]
+    let rep = wrapRef [body, pred, rep, Operator ControlUnless]
+    interpreter (pred : rep : Operator ControlUnless : is) -}
+    let rep = wrapRef (body : go)
+        go = [pred, wrapRef is, rep, Operator ControlIf]
     interpreter go
 interpreter (Operator ControlDo:is) = do
-    body <- popDataInstructions
-    pred <- popDataInstructions
-    interpreterCall body (Wrapper (Call pred) : Wrapper (Call body) : is)
+    body <- popDataInstruction
+    pred <- popDataInstruction
+    interpreter (body : wrapper pred : wrapper body : is)
 interpreter (Operator ControlDip:is) = do
-    ref <- popDataInstructions
+    ref <- popDataInstruction
     val <- popData
-    interpreterCall ref ((case val of
-        Boolean True -> Operator LiteralTrue
-        Boolean False -> Operator LiteralFalse
-        Integer w -> LiteralValue w
-        PortAddress w -> LiteralAddress w
-        Instructions i -> Wrapper $ Call i
-        ) : is)
+    interpreter (ref : Literal val : is)
 interpreter (Operator ControlKeep:is) = do
-    ref <- popDataInstructions
-    val <- popData
+    ref <- popDataInstruction
+    val <- popData -- TODO: getData
     pushData val
-    interpreterCall ref ((case val of
-        Boolean True -> Operator LiteralTrue
-        Boolean False -> Operator LiteralFalse
-        Integer w -> LiteralValue w
-        PortAddress w -> LiteralAddress w
-        Instructions i -> Wrapper $ Call i
-        ) : is)
+    interpreter (ref : Literal val : is)
 interpreter (i:is) = (\() -> interpreter is) =<< case i of
     Comment _ -> return ()
-    LiteralValue w -> pushData (Integer w)
-    LiteralAddress w -> pushData (PortAddress w)
     LiteralString s -> ThreadInterpreter \t -> InterpreterResult [s] t (Right ())
-    Wrapper i -> pushData $ Instructions (case i of
-        Call is -> is
-        _ -> makeRef [i])
+    Literal val -> pushData val
     Operator Debugger -> return () -- TODO: output
     Operator ControlIte -> do
         b <- popData
         a <- popData
         cond <- popDataBool
         pushData $ if cond then a else b
-    Operator LiteralFalse -> pushData (Boolean False)
-    Operator LiteralTrue -> pushData (Boolean True)
     Operator LogicNot -> popDataBool >>= pushData . Boolean . not
     Operator LogicNor -> interpretBinaryBool \a b -> not (a || b)
     Operator LogicLt -> interpretCompare (<)
@@ -287,4 +274,4 @@ showValue :: TaggedValue a -> String
 showValue (Boolean b) = show b
 showValue (Integer w) = show w
 showValue (PortAddress w) = '#':show w
-showValue (Instructions _) = "<Code>"
+showValue (Instruction _) = "<Code>"

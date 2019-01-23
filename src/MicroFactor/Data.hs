@@ -1,24 +1,42 @@
 module MicroFactor.Data
-    ( MicroFactorInstruction (..)
+    ( TaggedValue (..)
+    , MicroFactorInstruction (..)
     , MicroFactorOperator (..)
     , InstructionRef (..)
     , Nested
     ) where
 
+import Control.Monad (ap)
+
+-- the values that can be used in microfactor computations
+data TaggedValue r
+    = Boolean Bool
+    | Integer Word
+    | PortAddress Word
+    | Instruction (MicroFactorInstruction r)
+    deriving (Eq, Show, Functor, Foldable, Traversable)
+
+-- using `Instruction r` in `TaggedValue` and then referring to `TaggedValue (MicroFactorInstruction r)` everywhere
+-- would have allowed to use the derived `fmap` instead of `mapInstruction`
+-- but it would have lost the meaning of `TaggedValue`
+mapInstruction :: (MicroFactorInstruction a -> MicroFactorInstruction b) -> TaggedValue a -> TaggedValue b
+mapInstruction _ (Boolean b) = Boolean b
+mapInstruction _ (Integer w) = Integer w
+mapInstruction _ (PortAddress w) = PortAddress w
+mapInstruction f (Instruction i) = Instruction $ f i
+
 -- data type for instructions to be interpreted
 -- generic over the type of values to be called
 data MicroFactorInstruction r
-    = Comment String
-    | LiteralValue Word
-    | LiteralAddress Word -- Port address
-    | LiteralString String
-    | Wrapper (MicroFactorInstruction r)
-    | Call r
-    | Operator MicroFactorOperator
+    = Comment String -- code annotation, does nothing
+    | LiteralString String -- debug output
+    | Literal (TaggedValue r) -- put value on stack
+    | Call r -- call other things
+    | Operator MicroFactorOperator -- operate on the stack(s)
     deriving (Eq, Functor, Foldable, Traversable)
 
 -- could have been part of MicroFactorInstruction
--- separate definition makes monad & traversable implementations simpler
+-- separate definition makes monad implementation simpler
 data MicroFactorOperator
     = Execute
     | Debugger
@@ -34,8 +52,6 @@ data MicroFactorOperator
     | ControlDip
     | ControlKeep
 
-    | LiteralFalse
-    | LiteralTrue
     | LogicNot
     | LogicNor
     | LogicLt
@@ -84,17 +100,16 @@ data MicroFactorOperator
 
 instance Applicative MicroFactorInstruction where
     pure = return
-    fi <*> a = fi >>= (`fmap` a)
+    (<*>) = ap
 
+-- not truly useful, but simplifies implemenation of `resolveNames`
 instance Monad MicroFactorInstruction where
     return = Call
     i >>= f = case i of
         Call c -> f c
-        Wrapper x -> Wrapper $ x >>= f
-        Comment c -> Comment c
-        LiteralValue v -> LiteralValue v
-        LiteralAddress a -> LiteralAddress a
         LiteralString s -> LiteralString s
+        Literal x -> Literal $ mapInstruction (>>= f) x
+        Comment c -> Comment c
         Operator o -> Operator o
 
 --------------------------------------------------------------------------------
@@ -141,8 +156,6 @@ instance Show MicroFactorOperator where
     show ControlUntil   = "until"
     show ControlDip     = "dip"
     show ControlKeep    = "keep"
-    show LiteralFalse   = "false"
-    show LiteralTrue    = "true"
     show LogicNot       = "not"
     show LogicNor       = "nor"
     show LogicLt        = "<"
@@ -182,11 +195,13 @@ instance Show MicroFactorOperator where
 
 instance InstructionRef r => Show (MicroFactorInstruction r) where
     show (Comment c) = "(* " ++ c ++ " *)"
-    show (LiteralValue w) = show w
-    show (LiteralAddress w) = "#" ++ show w
     show (LiteralString s) = "\"" ++ s ++ "\"" -- TODO: escaping
-    show (Wrapper (Call ref)) | isAnonymous ref = "(" ++ showList (resolveRef ref) ")"
-    show (Wrapper i) = "'" ++ show i
+    show (Literal (Boolean True)) = "true"
+    show (Literal (Boolean False)) = "false"
+    show (Literal (Integer w)) = show w
+    show (Literal (PortAddress w)) = "#" ++ show w
+    show (Literal (Instruction (Call ref))) | isAnonymous ref = "(" ++ showList (resolveRef ref) ")"
+    show (Literal (Instruction i)) = "'" ++ show i
     show (Call ref) | isAnonymous ref = error "call to anonymous function"
                     | otherwise = refName ref
     show (Operator o) = show o
