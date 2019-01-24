@@ -62,7 +62,7 @@ run (Evaluate exp:cmds) = gets definitions >>= \defs -> case resolve defs exp of
         liftIO $ forM_ (interpreterOutput res) putStrLn
         -- liftIO $ print $ interpreterThread res
         case interpreterValue res of
-            Left e -> asWarning $ print e
+            Left e -> liftIO $ putWarning $ show e
             Right _ -> return ()
         liftIO $ putStrLn $ "{ " ++ (intercalate " { " $ fmap showValue $ reverse $ dataStack $ interpreterThread res)
         run cmds
@@ -79,14 +79,16 @@ run (List:cmds) = do
     run cmds
 
 putErrorMessage :: ParseError -> StateT s IO ()
-putErrorMessage err = asWarning do
+putErrorMessage err = liftIO do
     let pos = errorPos err
     let msg = formatErrorMessages err
-    putStrLn $ replicate (sourceColumn pos) ' ' ++ "  ^"
-    putStrLn msg
+    putStr $ replicate (2 + sourceColumn pos) ' ' -- 2 is the number of characters in the prompt
+    putWarning $ "^" ++ msg
 
-asWarning :: IO a -> StateT s IO ()
-asWarning print = liftIO do
+-- print a message with green on red color.
+putWarning :: String -> IO ()
+putWarning msg = do
     setSGR [SetColor Background Dull Red, SetColor Foreground Vivid Green]
-    print
+    putStr msg
     setSGR [] -- reset
+    putStr "\n" -- newline after the reset, otherwise the next line keeps the background

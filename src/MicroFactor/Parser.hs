@@ -140,6 +140,6 @@ resolve userDefs = resolveNames go
         lookup name builtinSymbols <|> fmap (Call . ResolvedRef name) (lookup name userDefs)
 
 -- | show the `errorMessages` of a `ParseError` only (not its `errorPos`).
--- Otherwise very similar to the `Show` instance
+-- Otherwise very similar to the `Show` instance. Notice the leading linebreak!
 formatErrorMessages :: ParseError -> String
-formatErrorMessages = showErrorMessages "or" "oops?" "expecting" "unexpected" "end of input" . errorMessages
+formatErrorMessages = showErrorMessages "or" "\noops?" "expecting" "unexpected" "end of input" . errorMessages
