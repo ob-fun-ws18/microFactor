@@ -1,9 +1,9 @@
+-- | Parse string to bytecode and resolve identifiers to other functions
 module MicroFactor.Parser
     ( ParsedRef (..)
     , ResolvedRef (..)
     , expressionParser
     , Command (..)
-    , resolveNames
     , builtinSymbols
     , commandParser
     , resolve
@@ -24,23 +24,26 @@ import MicroFactor.Data
 
 --------------------------------------------------------------------------------
 
+-- | The references to callables that the parser emits
 data ParsedRef
-    = Anonymous [MicroFactorInstruction ParsedRef]
-    | Named SourcePos String
+    = Anonymous [MicroFactorInstruction ParsedRef] -- ^ a parenthised code block
+    | Named SourcePos String -- ^ an identifier
     deriving (Eq, Show)
 
+-- necessary for `Show`
 instance InstructionRef ParsedRef where
     makeRef = Anonymous
-    resolveRef = const [] -- TODO
+    resolveRef = error "ParsedRefs cannot be interpreted"
     refName (Anonymous _) = ""
     refName (Named _ n) = n
 
+-- | An optionally named reference to more instructions
 data ResolvedRef = ResolvedRef String [MicroFactorInstruction ResolvedRef] deriving Eq
 
 instance InstructionRef ResolvedRef where
     makeRef = ResolvedRef ""
     resolveRef (ResolvedRef _ is) = is
-    refName (ResolvedRef n _) = n
+    refName (ResolvedRef n _) = n -- can be used to reconstruct the source text
 
 instance Show ResolvedRef where
     -- avoid showing circular structures in recursive functions
@@ -49,6 +52,7 @@ instance Show ResolvedRef where
 
 --------------------------------------------------------------------------------
 
+-- | A parser for an expression, i.e. an instruction sequence with at least one element
 expressionParser :: Parser [MicroFactorInstruction ParsedRef]
 expressionParser = element `sepBy1` spaces
   where
@@ -84,11 +88,13 @@ expressionParser = element `sepBy1` spaces
             , anyChar
             ]) <|> anyChar) (try $ string delim)
 
+-- | A parser for a identifier
 identifierParser :: Parser String
-identifierParser = flip label "identifier" $ many1 $ noneOf " ()[]{}'\":;"
+identifierParser = flip label "identifier" $ many1 $ noneOf " ()[]{}'\":;" -- TODO: no whitespace
 
 --------------------------------------------------------------------------------
 
+-- | The various commands available on the REPL
 data Command
     = Quit
     | List
@@ -97,6 +103,7 @@ data Command
     | ShowDef String
     deriving (Eq, Show)
 
+-- | A parser for a sequence of commands
 commandParser :: Parser [Command]
 commandParser = choice
     [ do
@@ -110,16 +117,20 @@ commandParser = choice
     , List <$ string "List"
     , ShowDef <$> (string "Show" *> many1 space *> identifierParser)
     , Evaluate <$> expressionParser <?> "expression"
-    ] `sepBy` spaces <* eof
+    ] `sepEndBy` spaces <* eof
 
 --------------------------------------------------------------------------------
-
+-- | Try to map the `Call` contents of a `MicroFactorInstruction` sequence to some other instruction, potentially with an error
 resolveNames :: (a -> Either b (MicroFactorInstruction c)) -> [MicroFactorInstruction a] -> Either b [MicroFactorInstruction c]
 resolveNames f = fmap (fmap join) . traverse (traverse f)
 
+-- | A lookup map of all the available `Operator`s from their names, including the two boolean literals
 builtinSymbols :: InstructionRef r => Map String (MicroFactorInstruction r)
 builtinSymbols = fromList $ fmap (show >>= (,)) $ fmap Operator [minBound..maxBound] ++ fmap (Literal . Boolean) [True, False]
 
+-- | Try to resolve the `Named` `ParsedRef`s in a `MicroFactorInstruction` sequence.
+-- Uses the `builtinSymbols` or a lookup in the supplied `Map` of available functions,
+-- emitting an /unknown identifier/ message if it fails for any
 resolve :: Map String [MicroFactorInstruction ResolvedRef] -> [MicroFactorInstruction ParsedRef] -> Either ParseError [MicroFactorInstruction ResolvedRef]
 resolve userDefs = resolveNames go
   where
@@ -128,5 +139,7 @@ resolve userDefs = resolveNames go
     go (Named loc name) = maybe (Left $ newErrorMessage (Message $ "unknown identifier " ++ name) loc) Right $
         lookup name builtinSymbols <|> fmap (Call . ResolvedRef name) (lookup name userDefs)
 
+-- | show the `errorMessages` of a `ParseError` only (not its `errorPos`).
+-- Otherwise very similar to the `Show` instance
 formatErrorMessages :: ParseError -> String
 formatErrorMessages = showErrorMessages "or" "oops?" "expecting" "unexpected" "end of input" . errorMessages

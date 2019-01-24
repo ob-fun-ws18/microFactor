@@ -1,3 +1,4 @@
+-- | Common data structures
 module MicroFactor.Data
     ( TaggedValue (..)
     , MicroFactorInstruction (..)
@@ -8,7 +9,7 @@ module MicroFactor.Data
 
 import Control.Monad (ap)
 
--- the values that can be used in microfactor computations
+-- | The values that can be used in microfactor computations
 data TaggedValue r
     = Boolean Bool
     | Integer Word
@@ -25,18 +26,19 @@ mapInstruction _ (Integer w) = Integer w
 mapInstruction _ (PortAddress w) = PortAddress w
 mapInstruction f (Instruction i) = Instruction $ f i
 
--- data type for instructions to be interpreted
--- generic over the type of values to be called
+-- | A data type for instructions to be interpreted.
+-- It is generic over the type of values to be called
 data MicroFactorInstruction r
-    = Comment String -- code annotation, does nothing
-    | LiteralString String -- debug output
-    | Literal (TaggedValue r) -- put value on stack
-    | Call r -- call other things
-    | Operator MicroFactorOperator -- operate on the stack(s)
+    = Comment String -- ^ code annotation, does nothing
+    | LiteralString String -- ^ debug output
+    | Literal (TaggedValue r) -- ^ put value on stack
+    | Call r -- ^ call other things
+    | Operator MicroFactorOperator -- ^ operate on the stack(s)
     deriving (Eq, Functor, Foldable, Traversable)
 
 -- could have been part of MicroFactorInstruction
 -- separate definition makes monad implementation simpler
+-- | The basic opcodes of the language
 data MicroFactorOperator
     = Execute
     | Debugger
@@ -85,24 +87,24 @@ data MicroFactorOperator
     | ArithMin
 
     | Send
-    -- | Yield
-    -- | YieldDelay
-    -- | YieldInput
-    -- | ThreadStart
-    -- | ThreadPass
-    -- | OwnPortAddress
-    -- | ReadField
-    -- | WriteField
-    -- | Input
-    -- | Output
-    -- | Random
+    -- Yield
+    -- YieldDelay
+    -- YieldInput
+    -- ThreadStart
+    -- ThreadPass
+    -- OwnPortAddress
+    -- ReadField
+    -- WriteField
+    -- Input
+    -- Output
+    -- Random
     deriving (Eq, Ord, Enum, Bounded)
 
 instance Applicative MicroFactorInstruction where
     pure = return
     (<*>) = ap
 
--- not truly useful, but simplifies implemenation of `resolveNames`
+-- not truly useful, but simplifies implementation of `resolveNames`
 instance Monad MicroFactorInstruction where
     return = Call
     i >>= f = case i of
@@ -114,14 +116,14 @@ instance Monad MicroFactorInstruction where
 
 --------------------------------------------------------------------------------
 
--- a typeclass for references to instructions
+-- | A typeclass for references to instructions
 -- so that the interpreter might be generic
 class InstructionRef a where
-    -- used to create a reference for anonymous blocks
+    -- | create a reference for anonymous blocks
     makeRef :: [MicroFactorInstruction a] -> a
-    -- used to get the referenced list of instruction
+    -- | get the referenced list of instruction
     resolveRef :: a -> [MicroFactorInstruction a]
-    -- used to refer to the instructions by name, instead of treating them as anonymous
+    -- | refer to the instructions by name, instead of treating them as anonymous
     refName :: a -> String
     refName _ = ""
 
@@ -133,7 +135,7 @@ instance InstructionRef a => Show a where
         name -> name
 -}
 
--- the most simple implementation of `InstructionRef`
+-- | the most simple implementation of `InstructionRef`
 -- while avoiding infinite types
 newtype Nested = Nested { unnest :: [MicroFactorInstruction Nested] } deriving Show
 instance InstructionRef Nested where
@@ -141,7 +143,8 @@ instance InstructionRef Nested where
     resolveRef = unnest
 
 --------------------------------------------------------------------------------
-
+-- | pretty-printing code
+-- (also used as language definition, for resolving names to operators in the parser)
 instance Show MicroFactorOperator where
     show Execute        = "execute"
     show Debugger       = "debugger"
@@ -193,6 +196,7 @@ instance Show MicroFactorOperator where
     -- show ThreadPass     = ""
     -- show _ = ""
 
+-- | pretty-printing code
 instance InstructionRef r => Show (MicroFactorInstruction r) where
     show (Comment c) = "(* " ++ c ++ " *)"
     show (LiteralString s) = "\"" ++ s ++ "\"" -- TODO: escaping

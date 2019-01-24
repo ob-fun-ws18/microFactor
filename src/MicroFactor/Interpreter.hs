@@ -1,6 +1,6 @@
+-- | Runtime and interpreter for MicroFactor bytecode
 module MicroFactor.Interpreter
-    ( ThreadInterpreter
-    , interpret
+    ( interpret
     , InterpreterError (..)
     , ThreadState (..)
     , InterpreterResult (..)
@@ -11,15 +11,20 @@ module MicroFactor.Interpreter
 
 import MicroFactor.Data
 
+-- | Things that can go wrong during interpretion
 data InterpreterError
-    = StackOverflow
-    | StackUnderflow
+    -- | an attempt was made to pop from the empty (data) stack
+    = StackUnderflow
+    -- StackOverflow - cannot happen with Haskell's arbitrarily long lists :-)
+    -- | an operation required an `Instruction` but was given some other value
     | InvalidExecutionToken
-    | CouldNotSuspend
-    | InfiniteLoop
+    -- | some other operation did get the wrong operands
     | TypeError String
+        -- TODO: CouldNotSuspend
+    -- TODO: InfiniteLoop
     deriving (Eq, Show)
 
+-- | Possible state for cooperative threads (not yet implemented)
 data ThreadState
     = Running -- or done, if nothing on return stack
     | Delayed
@@ -27,26 +32,30 @@ data ThreadState
     | Waiting
     deriving (Eq, Show)
 
+-- | A structure representing a cooperative thread (that might be suspended)
 data Thread r = Thread {
-    stopPending :: Bool,
-    stopCritical :: Bool,
+    -- TODO: stopPending :: Bool,
+    -- TODO: stopCritical :: Bool,
     state :: ThreadState,
     dataStack :: [TaggedValue r],
     returnStack :: [r]
 } deriving Show
 
+-- | A fresh new thread, ready to run instructions
 newThread :: Thread r
-newThread = Thread False False Running [] []
+newThread = Thread {- False False -} Running [] []
 
+-- | The result of executing instructions
 data InterpreterResult r a = InterpreterResult {
-    interpreterOutput :: [String],
-    interpreterThread :: Thread r,
-    interpreterValue :: Either InterpreterError a
+    interpreterOutput :: [String], -- ^ debug and `Send` output from the execution
+    interpreterThread :: Thread r, -- ^ the new state of the thread
+    interpreterValue :: Either InterpreterError a -- ^ the result value of the current step
 } deriving Show
 
 instance Functor (InterpreterResult r) where
     fmap f r = r { interpreterValue = f <$> interpreterValue r }
 
+-- | A monadic interpreter, representing a piece of code that can be executed on a thread
 newtype ThreadInterpreter r a = ThreadInterpreter {
     runInterpreter :: Thread r -> InterpreterResult r a
 } deriving Functor
@@ -155,20 +164,19 @@ wrapRef :: InstructionRef r => [MicroFactorInstruction r] -> MicroFactorInstruct
 wrapRef = wrapper . Call . makeRef
 
 --------------------------------------------------------------------------------
-
+-- | Interpret a sequence of instructions on a thread.
+-- Creates output and affects the thread, and can fail with an error.
 interpret :: InstructionRef a => [MicroFactorInstruction a] -> Thread a -> InterpreterResult a ()
 interpret = runInterpreter . interpreter
 
-interpreterCall :: InstructionRef a => a -> [MicroFactorInstruction a] -> ThreadInterpreter a ()
--- interpreterCall r is = interpreter (resolveRef r) >> interpreter is
-interpreterCall r is = ThreadInterpreter \t@Thread { returnStack } ->
-    runInterpreter (interpreter $ resolveRef r) t { returnStack = makeRef is:returnStack }
 
 interpreter :: InstructionRef a => [MicroFactorInstruction a] -> ThreadInterpreter a ()
 interpreter [] = ThreadInterpreter \t -> case t of
     Thread { returnStack = [] } -> InterpreterResult [] t (Right ())
     Thread { returnStack = r:rs } -> runInterpreter (interpreter $ resolveRef r) t { returnStack = rs }
-interpreter (Call r:is) = interpreterCall r is
+-- interpreter (Call r:is) = interpreter (resolveRef r) >> interpreter is -- does not make use of the retur stack, cannot be suspended properly
+interpreter (Call r:is) = ThreadInterpreter \t@Thread { returnStack } ->
+    runInterpreter (interpreter $ resolveRef r) t { returnStack = makeRef is:returnStack }
 interpreter (Operator Execute:is) = popDataInstruction >>= \r -> interpreter $ r : is
 interpreter (Operator ControlIf:is) = do
     else' <- popDataInstruction
@@ -270,6 +278,7 @@ interpreter (i:is) = (\() -> interpreter is) =<< case i of
         val <- popData
         ThreadInterpreter \t -> InterpreterResult [showValue val] t (Right ())
 
+-- | shortened representation of `TaggedValue`s
 showValue :: TaggedValue a -> String
 showValue (Boolean b) = show b
 showValue (Integer w) = show w
