@@ -13,7 +13,7 @@ extra-source-files:
 synopsis:            An implementation of the Factor programming lanugage with a feature set reduced to be suitable for microcontrollers
 category:            Compilers/Interpreters, Interpreter
 
-description:         Please see the README on GitHub at <https://github.com/githubuser/microfactor#readme>
+description:         Please see the README on GitHub at <https://github.com/ob-fun-ws18/microFactor#readme>
 
 dependencies:
 - base >= 4.7 && < 5
@@ -70,7 +70,7 @@ library:
   source-dirs: src
 
 executables:
-  microfactor-exe:
+  microfactor:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
