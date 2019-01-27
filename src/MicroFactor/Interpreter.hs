@@ -174,6 +174,7 @@ interpreter :: InstructionRef a => [MicroFactorInstruction a] -> ThreadInterpret
 interpreter [] = ThreadInterpreter \t -> case t of
     Thread { returnStack = [] } -> InterpreterResult [] t (Right ())
     Thread { returnStack = r:rs } -> runInterpreter (interpreter $ resolveRef r) t { returnStack = rs }
+interpreter (Call r:[]) = interpreter $ resolveRef r -- tail call optimisation
 -- interpreter (Call r:is) = interpreter (resolveRef r) >> interpreter is -- does not make use of the retur stack, cannot be suspended properly
 interpreter (Call r:is) = ThreadInterpreter \t@Thread { returnStack } ->
     runInterpreter (interpreter $ resolveRef r) t { returnStack = makeRef is:returnStack }
