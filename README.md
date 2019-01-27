@@ -31,6 +31,8 @@ result = do
     interpret newThread bytecode
 ```
 
+Read the [module documentation](https://ob-fun-ws18.github.io/microFactor/index.html) for more!
+
 ## About
 
 The REPL is built using [ANSI escape codes](http://www.lihaoyi.com/post/BuildyourownCommandLinewithANSIescapecodes.html).

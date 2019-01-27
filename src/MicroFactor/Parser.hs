@@ -1,3 +1,5 @@
+{-# LANGUAGE RecursiveDo #-}
+
 -- | Parse string to bytecode and resolve identifiers to other functions
 module MicroFactor.Parser
     ( ParsedRef (..)
@@ -6,7 +8,9 @@ module MicroFactor.Parser
     , Command (..)
     , builtinSymbols
     , commandParser
+    , MicroFactorScope
     , resolve
+    , define
     , formatErrorMessages
     ) where
 
@@ -14,7 +18,7 @@ import Control.Monad
 import Control.Applicative ((<|>))
 import Data.Functor (($>), (<&>))
 import Data.Char (digitToInt)
-import Data.Map.Strict (Map, fromList, lookup)
+import Data.Map.Lazy (Map, fromList, lookup, insert)
 import Text.Parsec hiding ((<|>))
 import Text.Parsec.String (Parser)
 import Text.Parsec.Error
@@ -122,22 +126,39 @@ commandParser = choice
 --------------------------------------------------------------------------------
 -- | Try to map the `Call` contents of a `MicroFactorInstruction` sequence to some other instruction, potentially with an error
 resolveNames :: (a -> Either b (MicroFactorInstruction c)) -> [MicroFactorInstruction a] -> Either b [MicroFactorInstruction c]
-resolveNames f = fmap (fmap join) . traverse (traverse f)
+resolveNames f = traverse (fmap join . traverse f)
 
 -- | A lookup map of all the available `Operator`s from their names, including the two boolean literals
 builtinSymbols :: InstructionRef r => Map String (MicroFactorInstruction r)
 builtinSymbols = fromList $ fmap (show >>= (,)) $ fmap Operator [minBound..maxBound] ++ fmap (Literal . Boolean) [True, False]
 
+-- | A `Map` of available functions
+type MicroFactorScope = Map String [MicroFactorInstruction ResolvedRef]
+
 -- | Try to resolve the `Named` `ParsedRef`s in a `MicroFactorInstruction` sequence.
--- Uses the `builtinSymbols` or a lookup in the supplied `Map` of available functions,
+-- Uses the `builtinSymbols` or a lookup in the supplied scope,
 -- emitting an /unknown identifier/ message if it fails for any
-resolve :: Map String [MicroFactorInstruction ResolvedRef] -> [MicroFactorInstruction ParsedRef] -> Either ParseError [MicroFactorInstruction ResolvedRef]
+resolve :: MicroFactorScope -> [MicroFactorInstruction ParsedRef] -> Either ParseError [MicroFactorInstruction ResolvedRef]
 resolve userDefs = resolveNames go
   where
     go :: ParsedRef -> Either ParseError (MicroFactorInstruction ResolvedRef)
     go (Anonymous is) = fmap (Call . ResolvedRef "") (resolveNames go is)
     go (Named loc name) = maybe (Left $ newErrorMessage (Message $ "unknown identifier " ++ name) loc) Right $
         lookup name builtinSymbols <|> fmap (Call . ResolvedRef name) (lookup name userDefs)
+
+-- | Add a function definition to the scope.
+-- Uses `resolve`, but also supports recursive definitions to the new function itself.
+-- TODO: Does not yet update references when redefining an existing name
+define :: String -- ^ Name of the new function
+    -> [MicroFactorInstruction ParsedRef] -- ^ Body of the new function
+    -> MicroFactorScope
+    -> Either ParseError MicroFactorScope
+{- see Assembly: Circular Programming with Recursive do
+    in The Monad.Reader Issue 6 <https://wiki.haskell.org/wikiupload/1/14/TMR-Issue6.pdf> -}
+define name val defs = mdo
+    let newDefs = insert name rval defs -- Note: this must be a Lazy map!
+    rval <- resolve newDefs val -- travels back in time!
+    return newDefs
 
 -- | show the `errorMessages` of a `ParseError` only (not its `errorPos`).
 -- Otherwise very similar to the `Show` instance. Notice the leading linebreak!

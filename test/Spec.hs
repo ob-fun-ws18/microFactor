@@ -3,7 +3,7 @@ import Test.Tasty.HUnit
 
 import Control.Monad (foldM, unless)
 import Data.List (isInfixOf)
-import Data.Map.Strict (Map, insert)
+import Data.Map.Lazy (member)
 import Text.Printf (printf)
 import Text.Parsec (runParser, errorPos)
 import Text.Parsec.Pos (SourcePos, newPos)
@@ -59,6 +59,7 @@ main = defaultMain $ testGroup "Microfactor"
             , callWrapper $ ResolvedRef "" [Operator StackDrop]
             , Literal $ Instruction $ Operator StackSwap]
         , testCase "unknown identifier" $ parseAndResolve mempty "'example" @?: [errorContainsMessage "unknown identifier example", errorIsInColumn 2]
+        , testCase "recursive definition" $ member "x" <$> parseAndDefine "x" "x" mempty @?= Right True
         ]
     , testGroup "Commands"
         [ testCase "simple declaration" $ runParser commandParser () "" ":test 1 + 1;" @?= Right
@@ -80,7 +81,7 @@ main = defaultMain $ testGroup "Microfactor"
         , testInterpreter (dataStack . interpreterThread) [] "2 1 true '- when false 'drop when" [Integer 1]
         , testInterpreter (dataStack . interpreterThread) [] "2 1 false '+ unless true 'dup unless" [Integer 3]
         , testInterpreter (dataStack . interpreterThread) [] "5 (1 - dup) loop" [Integer 0]
-        , testInterpreter interpreterOutput [] "5 (dup . 1 - dup) loop" ["5", "4", "3", "2", "1"]
+        , testInterpreter interpreterOutput               [] "5 (dup . 1 - dup) loop" ["5", "4", "3", "2", "1"]
         , testInterpreter (dataStack . interpreterThread) [] "1 5 ('* keep 1 - dup) loop drop" [Integer 120]
         , testInterpreter (dataStack . interpreterThread) [] "0 (dup 5 =) (1 +) until" [Integer 5]
         , testInterpreter (dataStack . interpreterThread) [] "(true) (1) until" []
@@ -89,7 +90,9 @@ main = defaultMain $ testGroup "Microfactor"
         , testInterpreter (dataStack . interpreterThread) [] "(false) (2) do while" [Integer 2]
         , testInterpreter (dataStack . interpreterThread) [] "1 5 'dup ('* keep 1 -) while drop" [Integer 120]
         , testInterpreter (dataStack . interpreterThread) [("times", "(('execute keep) dip 1 - dup) loop drop drop")] "0 (2 +) 5 times" [Integer 10]
-        , testInterpreter interpreterOutput [("times*", "((swap 'execute keep) keep 1 - dup) loop drop drop")] "'. 5 times*" ["5", "4", "3", "2", "1"]
+        , testInterpreter interpreterOutput               [("times*", "((swap 'execute keep) keep 1 - dup) loop drop drop")] "'. 5 times*" ["5", "4", "3", "2", "1"]
+        , testInterpreter (dataStack . interpreterThread) [("goRec", "dup (\"yeah!\" 1 - goRec) 'drop if")] "5 goRec" [] -- assert termination :-)
+        , testInterpreter interpreterOutput               [("goRec", "dup (\"yeah!\" 1 - goRec) 'drop if")] "5 goRec" (replicate 5 "yeah!")
         --, testInterpreter (dataStack . interpreterThread) [] "" []
         ]
     ]
@@ -142,12 +145,15 @@ roundTrip exp = testCase ("round-trip "++exp) $ show <$> parse exp @?= Right exp
 column :: Int -> SourcePos
 column = newPos "" 1
 
-parseAndResolve :: Map String [MicroFactorInstruction ResolvedRef] -> String -> Either ParseError [MicroFactorInstruction ResolvedRef]
+parseAndResolve :: MicroFactorScope -> String -> Either ParseError [MicroFactorInstruction ResolvedRef]
 parseAndResolve ctx str = runParser expressionParser () "" str >>= resolve ctx
+
+parseAndDefine :: String -> String -> MicroFactorScope -> Either ParseError MicroFactorScope
+parseAndDefine name body scope = runParser expressionParser () "" body >>= flip (define name) scope
 
 parseContext :: [(String, String)] -> String -> Either ParseError [MicroFactorInstruction ResolvedRef]
 parseContext list exp = do
-    userDefs <- foldM (\m (id, v) -> insert id <$> parseAndResolve m v <*> pure m) mempty list
+    userDefs <- foldM (\m (id, v) -> parseAndDefine id v m) mempty list
     parseAndResolve userDefs exp
 
 testInterpreter :: (Eq a, Show a) => (InterpreterResult ResolvedRef () -> a) -> [(String, String)] -> String -> a -> TestTree

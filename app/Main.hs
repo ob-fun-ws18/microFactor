@@ -4,7 +4,7 @@ import Control.Monad (forM_)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State
 import Data.List (intercalate)
-import Data.Map.Strict
+import Data.Map.Lazy (Map, empty, lookup, keys)
 import Text.Parsec (runParser)
 import Text.Parsec.Error
 import Text.Parsec.Pos
@@ -32,29 +32,19 @@ repl = do
         setSGR []
         hFlush stdout
         getLine
-    case runParser commandParser () "" line of
-        Left e -> do
-            putErrorMessage e
-            repl
-        Right cmds -> run cmds
+    handleError (runParser commandParser () "" line) run
 
 
 run :: [Command] -> StateT AppState IO ()
 run [] = repl
 run (Quit:_) = return ()
-run (Define id val:cmds) = gets definitions >>= \defs -> case resolve defs val of -- TODO: create circular reference to updated `defs`
-    Left e -> do
-        putErrorMessage e
-        repl -- dismiss other cmds
-    Right rval -> do
-        modify (\state -> state { definitions = insert id rval (definitions state) })
+run (Define id val:cmds) = gets definitions >>= \defs ->
+    handleError (define id val defs) \newDefs -> do
+        modify (\state -> state { definitions = newDefs })
         liftIO $ putStrLn $ "Defined " ++ id
         run cmds
-run (Evaluate exp:cmds) = gets definitions >>= \defs -> case resolve defs exp of
-    Left e -> do
-        putErrorMessage e
-        repl -- dismiss other cmds
-    Right rval -> do
+run (Evaluate exp:cmds) = gets definitions >>= \defs ->
+    handleError (resolve defs exp) \rval -> do
         -- print rval
         state <- get
         let res = interpret rval $ thread state
@@ -77,6 +67,9 @@ run (List:cmds) = do
     liftIO $ putStrLn $ unwords $ keys (builtinSymbols :: Map String (MicroFactorInstruction ResolvedRef))
     liftIO $ putStrLn $ unwords $ keys userFns
     run cmds
+
+handleError :: Either ParseError a -> (a -> StateT AppState IO ()) -> StateT AppState IO ()
+handleError = flip $ either \err -> putErrorMessage err >> repl -- dismiss other cmds
 
 putErrorMessage :: ParseError -> StateT s IO ()
 putErrorMessage err = liftIO do
