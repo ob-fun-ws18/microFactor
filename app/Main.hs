@@ -1,14 +1,18 @@
 module Main where
 
-import Control.Monad (forM_)
+import Control.Applicative ((<|>))
+import Control.Monad (forM_, (>=>))
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State
 import Data.List (intercalate)
 import Data.Map.Lazy (Map, empty, lookup, keys)
+import Data.Maybe (listToMaybe)
+import Data.Version (showVersion)
 import Text.Parsec (runParser)
 import Text.Parsec.Error
 import Text.Parsec.Pos
 import System.IO
+import System.Environment (getArgs)
 import System.Console.ANSI
 import Prelude hiding (lookup)
 
@@ -17,10 +21,12 @@ import MicroFactor
 main :: IO ()
 main = do
     setTitle "MicroFactor"
-    evalStateT repl AppState { definitions = empty, thread = newThread }
+    arg <- listToMaybe <$> getArgs
+    evalStateT (maybe repl (run . return . Load . Just) arg) AppState { definitions = empty, dictPath = arg, thread = newThread }
 
 data AppState = AppState
     { definitions :: Map String [MicroFactorInstruction ResolvedRef]
+    , dictPath :: Maybe FilePath
     , thread :: Thread ResolvedRef
 }
 
@@ -67,6 +73,24 @@ run (List:cmds) = do
     liftIO $ putStrLn $ unwords $ keys (builtinSymbols :: Map String (MicroFactorInstruction ResolvedRef))
     liftIO $ putStrLn $ unwords $ keys userFns
     run cmds
+run (Load arg:cmds) = do
+    path <- gets dictPath
+    case arg <|> path of
+        Nothing -> liftIO $ putWarning "no filepath given"
+        Just p -> do
+            defines <- liftIO $ withFile p ReadMode \h -> do
+                hSetEncoding h utf8
+                text <- hGetContents h
+                return $! runParser dictionaryParser () p text
+            scope <- gets definitions
+            -- let x = foldr (>=>) return $ map (uncurry define) ds
+            -- https://hackage.haskell.org/package/foldl-1.4.5/docs/Control-Foldl.html#t:EndoM
+            -- let x = appEndoM $ foldMap (EndoM . uncurry define) ds
+            let newDefs = defines >>= (\ds -> (foldr (>=>) return $ map (uncurry define) ds) scope)
+            either (\err -> liftIO (putWarning (show err)) >> repl) (\newScope -> do
+                modify (\state -> state { definitions = newScope })
+                liftIO $ putStrLn "ok."
+                run cmds) newDefs
 
 handleError :: Either ParseError a -> (a -> StateT AppState IO ()) -> StateT AppState IO ()
 handleError = flip $ either \err -> putErrorMessage err >> repl -- dismiss other cmds

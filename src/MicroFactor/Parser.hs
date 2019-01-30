@@ -8,6 +8,7 @@ module MicroFactor.Parser
     , Command (..)
     , builtinSymbols
     , commandParser
+    , dictionaryParser
     , MicroFactorScope
     , resolve
     , define
@@ -83,18 +84,22 @@ expressionParser = element `sepBy1` spaces
         , many digit <&> parseNumber 10
         ]) <|> (many1 digit <&> parseNumber 10)
     parseNumber base = Literal . Integer . foldl (\x -> ((base * x) +) . fromIntegral . digitToInt) 0
-    stringLiteral = flip label "string" do
-        delim <- many1 $ char '"'
-        LiteralString <$> manyTill ((char '\\' >> choice
-            [ char 'r' $> '\r'
-            , char 'n' $> '\n'
-            , char 't' $> '\t'
-            , anyChar
-            ]) <|> anyChar) (try $ string delim)
+    stringLiteral = flip label "string" $ LiteralString <$> stringParser
 
 -- | A parser for a identifier
 identifierParser :: Parser String
 identifierParser = flip label "identifier" $ many1 $ noneOf " ()[]{}'\":;" -- TODO: no whitespace
+
+-- | A parser for string literal syntax
+stringParser :: Parser String
+stringParser = do
+    delim <- many1 $ char '"'
+    manyTill ((char '\\' >> choice
+        [ char 'r' $> '\r'
+        , char 'n' $> '\n'
+        , char 't' $> '\t'
+        , anyChar
+        ]) <|> anyChar) (try $ string delim)
 
 --------------------------------------------------------------------------------
 
@@ -105,23 +110,37 @@ data Command
     | Define String [MicroFactorInstruction ParsedRef]
     | Evaluate [MicroFactorInstruction ParsedRef]
     | ShowDef String
+    | Load (Maybe String)
+    | Save (Maybe String)
     deriving (Eq, Show)
 
 -- | A parser for a sequence of commands
 commandParser :: Parser [Command]
 commandParser = choice
-    [ do
-        char ':'
-        id <- identifierParser
-        spaces
-        expr <- expressionParser
-        char ';'
-        return $ Define id expr
-    , Quit <$ string "Quit"
-    , List <$ string "List"
-    , ShowDef <$> (string "Show" *> many1 space *> identifierParser)
+    [ uncurry Define <$> definitionParser
+    , Quit <$ tryString "Quit"
+    , List <$ tryString "List"
+    , ShowDef <$> (tryString "Show" *> many1 space *> identifierParser)
+    , Load <$> (tryString "Load" *> filename)
+    , Load Nothing <$ tryString "Reload"
+    , Save <$> (tryString "Save" *> filename)
     , Evaluate <$> expressionParser <?> "expression"
     ] `sepEndBy` spaces <* eof
+  where
+    tryString = try . string
+    filename = optionMaybe $ many1 space *> (stringParser <|> identifierParser)
+
+definitionParser :: Parser (String, [MicroFactorInstruction ParsedRef])
+definitionParser = do
+    char ':'
+    id <- identifierParser
+    spaces
+    expr <- expressionParser
+    char ';'
+    return (id, expr)
+
+dictionaryParser :: Parser [(String, [MicroFactorInstruction ParsedRef])]
+dictionaryParser = sepEndBy definitionParser (newline <|> crlf) <* eof
 
 --------------------------------------------------------------------------------
 -- | Try to map the `Call` contents of a `MicroFactorInstruction` sequence to some other instruction, potentially with an error
