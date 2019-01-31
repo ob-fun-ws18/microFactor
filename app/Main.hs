@@ -5,7 +5,7 @@ import Control.Monad (forM_, (>=>))
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State
 import Data.List (intercalate)
-import Data.Map.Lazy (Map, empty, lookup, keys)
+import Data.Map.Lazy (Map, empty, lookup, keys, foldMapWithKey)
 import Data.Maybe (listToMaybe)
 import Data.Version (showVersion)
 import Text.Parsec (runParser)
@@ -76,8 +76,9 @@ run (List:cmds) = do
 run (Load arg:cmds) = do
     path <- gets dictPath
     case arg <|> path of
-        Nothing -> liftIO $ putWarning "no filepath given"
+        Nothing -> (liftIO $ putWarning "no filepath given") >> repl
         Just p -> do
+            -- TODO: catch io exceptions
             defines <- liftIO $ withFile p ReadMode \h -> do
                 hSetEncoding h utf8
                 text <- hGetContents h
@@ -91,6 +92,19 @@ run (Load arg:cmds) = do
                 modify (\state -> state { definitions = newScope })
                 liftIO $ putStrLn "ok."
                 run cmds) newDefs
+run (Save arg:cmds) = do
+    path <- gets dictPath
+    case arg <|> path of
+        Nothing -> (liftIO $ putWarning "no filepath given") >> repl
+        Just p -> do
+            scope <- gets definitions
+            let text = foldMapWithKey (\name def -> ":"++name++" "++show def++";\n") scope
+            -- TODO: catch io exceptions
+            liftIO $ withFile p WriteMode \h -> do
+                hSetEncoding h utf8
+                hPutStr h text
+            run cmds
+
 
 handleError :: Either ParseError a -> (a -> StateT AppState IO ()) -> StateT AppState IO ()
 handleError = flip $ either \err -> putErrorMessage err >> repl -- dismiss other cmds
