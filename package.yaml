@@ -20,7 +20,7 @@ dependencies:
 - containers
 - ansi-terminal
 - parsec
-- transformers
+- mtl
 
 ghc-options:
   - -Wall
